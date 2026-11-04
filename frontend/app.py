@@ -97,11 +97,27 @@ def show_model_caption(data):
         st.caption(f"Modelo usado: {used}{suffix}")
 
 
+def _show_image(image_url, image_page):
+    """Muestra la imagen asociada sin exponer la URL interna de la API
+    al navegador: el frontend la descarga por dentro (api:8000 si es
+    alcanzable solo en la red de Docker) y se la pasa a Streamlit como
+    bytes. Antes se pasaba la URL cruda y el navegador del evaluador
+    intentaba abrir http://api:8000, que no existe fuera del VPS, y
+    quedaba un icono roto. Si la descarga falla, no se muestra un
+    icono roto: se avisa en texto."""
+    try:
+        resp = httpx.get(f"{API_URL}{image_url}", timeout=30.0)
+        resp.raise_for_status()
+        st.image(resp.content,
+                 caption=f"Diagrama / imagen — Pagina {image_page}")
+    except Exception:
+        st.caption("Imagen asociada no se pudo cargar desde el servidor.")
+
+
 def show_answer(data):
     st.markdown(data["answer"])
     if data.get("image_url"):
-        st.image(f"{API_URL}{data['image_url']}",
-                 caption=f"Diagrama / imagen — Pagina {data['image_page']}")
+        _show_image(data["image_url"], data["image_page"])
     for src in data.get("sources", []):
         st.caption(f"Fuente: {src['document_name']}, Pagina {src['page']} "
                    f"({src['kind']})")
@@ -468,8 +484,7 @@ for msg in st.session_state["history"]:
         if msg.get("description"):
             st.caption(f"Descripción de la imagen: {msg['description']}")
         if msg.get("image_url"):
-            st.image(f"{API_URL}{msg['image_url']}",
-                     caption=f"Diagrama / imagen — Pagina {msg.get('image_page')}")
+            _show_image(msg["image_url"], msg.get("image_page"))
         for src in msg.get("sources", []):
             st.caption(f"Fuente: {src['document_name']}, Pagina {src['page']} "
                        f"({src['kind']})")
