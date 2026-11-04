@@ -402,9 +402,9 @@ with st.sidebar:
     components.html(bridge, height=0)
     st.session_state.pop("clear_token_field", None)
 
-    st.header("Base de datos (solo lectura)")
+    st.header("Visualizar RAG")
     st.caption("Para el evaluador: que hay guardado en la base de vectores y como se ve. Solo lectura: no se puede borrar ni modificar nada desde aqui.")
-    if st.button("Ver base de datos"):
+    if st.button("Visualizar RAG"):
         try:
             resp = httpx.get(f"{API_URL}/data/overview", timeout=30.0)
             if resp.status_code != 200:

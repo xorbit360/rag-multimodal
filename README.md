@@ -283,8 +283,8 @@ ancho completo, los botones son grandes y tactiles (minimo 48 px) y el
 input usa fuente de 16 px para evitar el zoom automatico de iOS. No es
 un rediseno completo, solo ajustes para que se vea bien en el movil.
 
-### Boton "Ver base de datos" (panel solo lectura, para el evaluador)
-En la barra lateral del demo hay un boton "Ver base de datos" que
+### Boton "Visualizar RAG" (panel solo lectura, para el evaluador)
+En la barra lateral del demo hay un boton "Visualizar RAG" que
 consulta `GET /data/overview` y muestra: motor (Qdrant o memoria),
 coleccion, puntos guardados, dimension del vector, tipo de embedding
 y los primeros puntos de ejemplo con documento, pagina, tipo, seccion
