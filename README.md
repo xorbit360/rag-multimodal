@@ -386,7 +386,11 @@ coincidencia de tokens, y nunca se presenta como semántico.
    encola el `job_id` y guarda el Job completo (incluida la ruta del
    PDF en el volumen compartido `rag_storage`), y N workers
    (`app/worker.py`, servicio `worker` en compose) consumen y
-   re-ejecutan la ingesta de verdad desde ese Job. Redis corre con
+   re-ejecutan la ingesta de verdad desde ese Job. El worker usa
+   polling con LPOP cada 2 s, no BLPOP: en el despliegue en vivo,
+   BLPOP con redis-py 8.1.0 / RESP3 cerraba el socket con
+   TimeoutError al vencer el timeout, mientras que LPOP funciona;
+   un job se procesa en menos de 2 s tras encolarse. Redis corre con
    appendonly y volumen `redis_data`, así que jobs y cola sobreviven
    a un reinicio. Para escalar más allá de un host, el siguiente paso
    sería mover el JobStore a Postgres y `storage/` a un object store;
