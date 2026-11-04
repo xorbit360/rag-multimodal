@@ -216,12 +216,15 @@ with st.sidebar:
                    "https://qdrant.rag.xorbit360.com/dashboard")
 
     st.header("LLM (opcional)")
-    st.caption("Sin token propio, usa el token compartido del sistema si "
-               "lo hay; si no, responde sin token, sin costo. Pega tu "
-               "token y se detecta el proveedor solo. O escribe una Base "
-               "URL personalizada (p. ej. Ollama local) y se detectan sus "
-               "modelos automaticamente, sin token. Si guardas un token, "
-               "queda encriptado en el servidor asociado a tu navegador "
+    st.caption("No necesitas pegar nada para probar: el demo ya trae un "
+               "token compartido del sistema activo, y el chat, el audio "
+               "y la imagen lo usan de una vez. Si pegas tu propio token, "
+               "ese manda y sobreescribe al compartido; si lo borras, "
+               "vuelve el compartido. Sin token propio, responde sin "
+               "token, sin costo. O escribe una Base URL personalizada "
+               "(p. ej. Ollama local) y se detectan sus modelos "
+               "automaticamente, sin token. Si guardas un token, queda "
+               "encriptado en el servidor asociado a tu navegador "
                "(no se guarda en este navegador) y puedes borrarlo.")
     token = st.text_input("Token del LLM", type="password", key="llm_token")
     custom_url = st.text_input(
@@ -543,6 +546,24 @@ if chat_value:
         st.warning("Envía solo un adjunto por pregunta: audio o imagen.")
         st.stop()
     override = st.session_state.get("llm_override")
+    # Token predeterminado sin pegar nada: si el navegador ya tiene un
+    # token guardado o el compartido del sistema, el audio y la imagen
+    # tambien funcionan sin override en la sesion (por ejemplo, en la
+    # primera carga, antes de que el puente de browser_id complete).
+    # El backend resuelve la clave en el servidor con browser_id y usa
+    # el modelo guardado de esa configuracion (gpt-4o-mini para la
+    # predeterminada). Si el visitante pega el suyo, ese manda; al
+    # borrarlo, vuelve la predeterminada. Sin token en absoluto, si se
+    # avisa que hace falta pegarlo.
+    if not override:
+        _status = st.session_state.get("token_status") or {}
+        if _status.get("active") in ("visitor", "default"):
+            override = {"provider": _status.get("provider") or "openai",
+                        "base_url": _status.get("base_url"),
+                        "model": _status.get("model"),
+                        "api_key": "",
+                        "auto_model": bool(_status.get("auto_model", False)),
+                        "models_info": _status.get("models_info")}
 
     if audio_upload is not None:
         if not override:
