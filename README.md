@@ -331,17 +331,22 @@ ancho completo, los botones son grandes y tactiles (minimo 48 px) y el
 input usa fuente de 16 px para evitar el zoom automatico de iOS. No es
 un rediseno completo, solo ajustes para que se vea bien en el movil.
 
-### Ver el vector store sin exponer Qdrant
-El demo publico NO enlaza al dashboard de Qdrant: ese panel permite
-escribir y borrar, asi que exponerlo desde la web publica romperia
-el demo para el siguiente evaluador. La vista de solo lectura es la
-pagina aparte `Trabajos` (en el demo en vivo, /Trabajos) y el
-endpoint `GET /data/overview` como API de solo lectura (motor,
-coleccion, puntos, dimension, embedding y puntos de ejemplo), que
-existe SOLO en modo demo (fuera de el devuelve 404). Quien corra el
-proyecto en local si puede abrir su propio Qdrant en
-http://localhost:6333/dashboard, porque ahi el riesgo lo asume el
-mismo usuario.
+### Ver el vector store por dentro, sin exponer credenciales
+El demo enlaza al dashboard de Qdrant ("Ver base vectorial (Qdrant)"
+en el chat y en `Trabajos`), para que el evaluador verifique la
+coleccion real fuera de la pantalla del proyecto. El enlace NO lleva
+usuario ni contrasena: el panel pide autenticacion basica al entrar
+y esas credenciales se comparten solo por correo privado, nunca en
+el frontend ni en el repositorio. El panel permite escribir y
+borrar, asi que su uso es solo de consulta; si alguien borra algo,
+la coleccion se vuelve a sembrar y la contrasena se rota despues de
+la evaluacion. La vista de solo lectura sin credenciales sigue
+siendo la pagina aparte `Trabajos` (en el demo en vivo, /Trabajos)
+y el endpoint `GET /data/overview` (motor, coleccion, puntos,
+dimension, embedding y puntos de ejemplo), que existe SOLO en modo
+demo (fuera de el devuelve 404). Quien corra el proyecto en local
+si puede abrir su propio Qdrant en http://localhost:6333/dashboard,
+porque ahi el riesgo lo asume el mismo usuario.
 
 ### Lista de documentos tras un reinicio
 `GET /documents` une el registro de jobs con el contenido real del

@@ -93,6 +93,12 @@ except Exception as exc:
     st.error(f"No se pudieron listar los documentos: {exc}")
 
 st.header("Ficha tecnica del vector store")
+st.caption("Para ver la coleccion real en Qdrant, fuera de esta pantalla: "
+           "el acceso pide usuario y contrasena, que se comparten solo "
+           "por correo privado, nunca aqui ni en el repositorio. "
+           "Uso solo de consulta: no borres ni edites puntos.")
+st.link_button("Ver base vectorial (Qdrant)",
+               "https://qdrant.rag.xorbit360.com/dashboard")
 try:
     overview = httpx.get(f"{API_URL}/data/overview", timeout=10.0).json()
     st.write(f"- Coleccion: {overview['collection']}")

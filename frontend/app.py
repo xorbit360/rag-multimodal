@@ -184,6 +184,14 @@ with st.sidebar:
         st.write(f"- {doc['document_name']} ({doc['chunks']} chunks, "
                  f"{doc['images']} imagenes)")
 
+    st.header("Base vectorial")
+    st.caption("Ver la coleccion real en Qdrant, fuera de esta pantalla. "
+               "El acceso pide usuario y contrasena, que se comparten "
+               "solo por correo privado, nunca aqui ni en el repositorio. "
+               "Uso solo de consulta: no borres ni edites puntos.")
+    st.link_button("Ver base vectorial (Qdrant)",
+                   "https://qdrant.rag.xorbit360.com/dashboard")
+
     st.header("LLM (opcional)")
     st.caption("Sin token propio, usa el token compartido del sistema si "
                "lo hay; si no, responde sin token, sin costo. Pega tu "
