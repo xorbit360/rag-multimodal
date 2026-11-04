@@ -87,22 +87,47 @@ def _cheap_rank(model_id: str) -> int:
     return len(CHEAP_ORDER)
 
 
+# Subcadenas de modelos que estan en /models pero NO aceptan
+# /chat/completions: si el automatico elige uno, el chat devuelve 404
+# y el audio (que primero transcribe bien) falla despues, con un
+# mensaje que culpa a la transcripcion. Caso real 2026-11-04: la
+# transcripcion con whisper-1 dio 200 y el chat dio 404, porque el
+# automatico habia elegido una variante de gpt-4o-mini que no es de
+# chat (por ejemplo -tts), solo por compartir la subcadena "gpt-4o-mini".
+NON_CHAT_HINTS = [
+    "whisper", "tts", "embed", "dall", "image", "transcri", "speech",
+    "realtime", "moderation", "sora", "audio-preview",
+]
+
+
+def _is_chat_model(candidate: ModelCandidate) -> bool:
+    lowered = candidate.id.lower()
+    return not any(hint in lowered for hint in NON_CHAT_HINTS)
+
+
 def select_model(candidates: list[ModelCandidate],
                  need_vision: bool = False) -> str | None:
-    """Elige el modelo mas economico. Devuelve None si no hay candidatos
-    o si se pide vision y ninguno la soporta."""
+    """Elige el modelo mas economico QUE ACEPTE CHAT. Devuelve None si
+    no hay candidatos o si se pide vision y ninguno la soporta."""
     if not candidates:
         return None
     pool = [c for c in candidates if supports_vision(c)] if need_vision else list(candidates)
     if not pool:
         return None
+    chat_pool = [c for c in pool if _is_chat_model(c)]
+    if chat_pool:
+        pool = chat_pool
     priced = [c for c in pool if c.prompt_price is not None]
+    # Empate en precio o en orden de costo: gana el id mas corto, es
+    # decir, el modelo base exacto ("gpt-4o-mini") antes que sus
+    # variantes ("gpt-4o-mini-2024-07-18", "-search-preview", ...).
+    # Antes ganaba el primero de la lista del proveedor, y una variante
+    # no-chat podia ganar solo por aparecer antes.
     if priced:
-        # Precio mas bajo; empate: orden de costo conocido; luego orden
-        # original del proveedor (el sort es estable).
         return min(priced,
-                   key=lambda c: (c.prompt_price, _cheap_rank(c.id))).id
-    return min(pool, key=lambda c: _cheap_rank(c.id)).id
+                   key=lambda c: (c.prompt_price, _cheap_rank(c.id),
+                                  len(c.id))).id
+    return min(pool, key=lambda c: (_cheap_rank(c.id), len(c.id))).id
 
 
 def select_transcription_model(candidates: list[ModelCandidate]) -> str:

@@ -1,6 +1,6 @@
 # Sistema RAG Multimodal
 
-> **Demo en vivo:** https://rag.xorbit360.com — Trabajos, solo lectura: https://rag.xorbit360.com/Trabajos
+> **Demo en vivo:** https://rag.xorbit360.com — Trabajos: https://rag.xorbit360.com/Trabajos
 
 Sistema RAG para PDFs técnicos con texto, tablas, diagramas e imágenes.
 Responde en lenguaje natural usando solo el contexto recuperado, muestra
@@ -294,7 +294,22 @@ elegir usa los precios que el proveedor devuelve en /models (OpenRouter
 los trae) y, si no hay precios, una tabla de orden de costo conocido
 (mini/flash primero) con fallback al orden del proveedor. Cada respuesta
 muestra el modelo usado ("Modelo usado: gpt-4o-mini (automático)"). Si
-eliges un modelo manual, se respeta tu eleccion.
+eliges un modelo manual, se respeta tu eleccion. El automatico solo
+elige modelos de chat: excluye whisper, tts, embeddings, imagen y
+realtime, y en empate gana el modelo base exacto antes que sus
+variantes. Sin ese filtro, una variante no-chat podia ganar por
+compartir subcadena ("gpt-4o-mini-tts") y el chat devolvia 404
+despues de una transcripcion exitosa, con un mensaje que culpaba a
+la transcripcion (caso real 2026-11-04).
+
+### Borrar un documento
+Desde el chat (lista de documentos indexados) y desde `Trabajos` se
+puede eliminar un PDF, con confirmacion en dos pasos. `DELETE
+/documents/{document_id}` borra sus puntos en el vector store, sus
+trabajos en el JobStore, su indice de hash y sus archivos (PDF e
+imagenes). Borra por document_id, no por nombre: dos ingestas del
+mismo nombre se borran una por una. Tras borrar, el mismo PDF se
+puede volver a subir sin aparecer como duplicado.
 
 ### Preguntas por audio e imagen (chat, con token)
 El chat acepta adjuntos (el PDF NO: sigue solo por la barra lateral):
@@ -419,7 +434,7 @@ coincidencia de tokens, y nunca se presenta como semántico.
 
 ```bash
 pytest -q
-# 127 passed
+# 131 passed
 ```
 
 Sin llave de API real y sin internet. Cubren: chunking por layout,

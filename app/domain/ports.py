@@ -46,6 +46,12 @@ class VectorStorePort(Protocol):
         guardados, de ejemplo. Nunca modifica nada."""
         ...
 
+    def delete_document(self, document_id: str) -> int:
+        """Borra TODOS los puntos de un documento y devuelve cuantos
+        borro. Es la unica escritura del vector store fuera de la
+        ingesta, y la usa el borrado de documentos desde la UI."""
+        ...
+
 
 class LLMPort(Protocol):
     def generate(self, system_prompt: str, user_prompt: str) -> str:
@@ -98,4 +104,10 @@ class JobStorePort(Protocol):
         ...
 
     def all(self) -> list[Job]:
+        ...
+
+    def delete_by_document(self, document_id: str) -> list[Job]:
+        """Borra los trabajos de un documento y devuelve los trabajos
+        borrados, para limpiar tambien su indice de hash y sus
+        archivos. Solo lo usa el borrado de documentos."""
         ...

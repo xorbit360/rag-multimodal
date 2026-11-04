@@ -59,3 +59,17 @@ def test_transcripcion_prefiere_whisper_mas_barato():
 def test_transcripcion_sin_whisper_fallback():
     assert select_transcription_model([_c("gpt-4o-mini")]) == "whisper-1"
     assert select_transcription_model([]) == "whisper-1"
+
+
+def test_automatico_excluye_modelos_no_chat():
+    # Caso real 2026-11-04: una variante -tts compartia la subcadena
+    # "gpt-4o-mini" y ganaba por aparecer antes, y el chat daba 404.
+    cands = [_c("gpt-4o-mini-tts"), _c("whisper-1"),
+             _c("text-embedding-3-small"), _c("gpt-4o-mini")]
+    assert select_model(cands) == "gpt-4o-mini"
+
+
+def test_automatico_prefiere_modelo_base_exacto_ante_variantes():
+    cands = [_c("gpt-4o-mini-2024-07-18"), _c("gpt-4o-mini"),
+             _c("gpt-4o-mini-search-preview")]
+    assert select_model(cands) == "gpt-4o-mini"

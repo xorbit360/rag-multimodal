@@ -1,4 +1,4 @@
-"""Pagina aparte 'Trabajos': lo que hay en Redis, solo lectura.
+"""Pagina aparte 'Trabajos': lo que hay en Redis y en el vector store.
 
 Esta pagina NO es el chat y no contamina su visual: Streamlit la
 muestra como un menu aparte en la barra lateral. Aqui el evaluador
@@ -7,9 +7,10 @@ ve la ficha tecnica de la ingesta: que trabajos hay en el JobStore
 imagenes genero cada uno y si alguno fallo, mas la ficha del vector
 store (coleccion, puntos, dimension, embedding).
 
-No hay ningun boton que cree, borre o edite nada: es solo lectura.
-Para probar una ingesta nueva, se sube un PDF desde la pagina del
-chat (menu Ingesta); aqui solo se consulta su progreso.
+Los trabajos son solo lectura; los documentos SI se pueden eliminar
+(con confirmacion, desde la seccion Documentos indexados y desde el
+chat). Para probar una ingesta nueva, se sube un PDF desde la pagina
+del chat (menu Ingesta); aqui se consulta su progreso.
 """
 import os
 
@@ -19,12 +20,12 @@ import streamlit as st
 API_URL = os.environ.get("API_URL", "http://localhost:8000")
 
 st.set_page_config(page_title="Trabajos — RAG Multimodal", layout="wide")
-st.title("Trabajos en Redis — solo lectura")
+st.title("Trabajos en Redis")
 st.caption(
     "Lo que hay en el JobStore (Redis en docker-compose, memoria en "
-    "local) y en la base de vectores. Solo lectura: aqui no se crea, "
-    "no se borra y no se edita nada. Para ingerir un PDF, usa el menu "
-    "de Ingesta en la pagina del chat."
+    "local) y en la base de vectores. Los trabajos son solo lectura; "
+    "los documentos se pueden eliminar con confirmacion abajo. Para "
+    "ingerir un PDF, usa el menu de Ingesta en la pagina del chat."
 )
 
 if st.button("Actualizar"):
@@ -71,6 +72,9 @@ else:
     st.dataframe(rows, use_container_width=True, hide_index=True)
 
 st.header("Documentos indexados")
+st.caption("Eliminar borra el documento completo: sus chunks en el "
+           "vector store, sus trabajos y sus archivos. Es irreversible; "
+           "para volver a tenerlo, subelo de nuevo desde el chat.")
 try:
     docs = httpx.get(f"{API_URL}/documents", timeout=10.0).json()
     if not docs:
@@ -89,6 +93,31 @@ try:
             use_container_width=True,
             hide_index=True,
         )
+        for d in docs:
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                st.write(f"- {d['document_name']} ({d['chunks']} chunks, "
+                         f"{d['images']} imagenes)")
+            with col2:
+                if st.button("Eliminar", key=f"del-{d['document_id']}"):
+                    st.session_state["confirm_delete"] = d["document_id"]
+            if st.session_state.get("confirm_delete") == d["document_id"]:
+                st.warning("¿Borrar este PDF? No se puede deshacer.")
+                if st.button("Si, borrar", key=f"confirm-{d['document_id']}"):
+                    resp = httpx.delete(
+                        f"{API_URL}/documents/{d['document_id']}",
+                        timeout=30.0)
+                    if resp.status_code == 200:
+                        st.success(
+                            f"Borrado: {d['document_name']} "
+                            f"({resp.json()['chunks_removed']} chunks)")
+                    else:
+                        st.error(f"No se pudo borrar: {resp.text}")
+                    st.session_state["confirm_delete"] = None
+                    st.rerun()
+                if st.button("Cancelar", key=f"cancel-{d['document_id']}"):
+                    st.session_state["confirm_delete"] = None
+                    st.rerun()
 except Exception as exc:
     st.error(f"No se pudieron listar los documentos: {exc}")
 

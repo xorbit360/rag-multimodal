@@ -34,7 +34,9 @@ from app.domain.models import JobStatus
 from app.domain.ports import (
     ProviderResponseError, StoreUnavailableError, VisionNotSupportedError,
 )
-from app.domain.use_cases import AskUseCase, AudioAskUseCase, ImageAskUseCase
+from app.domain.use_cases import (
+    AskUseCase, AudioAskUseCase, DeleteDocumentUseCase, ImageAskUseCase,
+)
 from app.infrastructure.logging import setup_logging
 from app.infrastructure.resilience import CircuitOpenError
 
@@ -173,6 +175,33 @@ def list_documents():
                                        if c.image_id}),
                         "status": "completed"}
     return list(docs.values())
+
+
+@app.delete("/documents/{document_id}")
+def delete_document(document_id: str):
+    """Borra un documento completo: puntos en el vector store, trabajos
+    y archivos (PDF e imagenes). Irreversible, por eso la UI pide
+    confirmacion en dos pasos antes de llamarlo. Borra por document_id:
+    dos ingestas del mismo nombre se borran una por una. Tras borrar,
+    el mismo PDF se puede volver a subir sin aparecer como duplicado."""
+    try:
+        result = DeleteDocumentUseCase(container.store, container.jobs).delete(
+            document_id)
+    except StoreUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    if result is None:
+        raise HTTPException(status_code=404, detail="Documento no encontrado")
+    for image_id in result["image_ids"]:
+        path = os.path.join(container.images_dir, f"{image_id}.png")
+        if os.path.exists(path):
+            os.remove(path)
+    for pdf_path in result["pdf_paths"]:
+        if pdf_path and os.path.exists(pdf_path):
+            os.remove(pdf_path)
+    return {"document_id": result["document_id"],
+            "document_name": result["document_name"],
+            "chunks_removed": result["chunks_removed"],
+            "jobs_removed": result["jobs_removed"]}
 
 
 @app.get("/data/overview", response_model=DataOverviewOut)
@@ -424,6 +453,8 @@ def _resolve_llm(provider: str, model: str | None, api_key: str,
                 detail="No se pudo elegir un modelo automatico: el proveedor "
                        "no devolvio modelos. Elige un modelo manual.")
         try:
+            log.info("modelo automatico elegido provider=%s modelo=%s",
+                     provider, chosen)
             return (build_override_llm(provider, chosen, api_key, base_url),
                     chosen, True)
         except ValueError as exc:
@@ -557,10 +588,16 @@ def ask_audio(audio: UploadFile = File(...),
             detail="El servicio de busqueda no esta disponible en este "
                    "momento. Intentalo de nuevo en unos minutos.")
     except httpx.HTTPError:
+        # Este except cubre DOS pasos (transcribir y luego responder
+        # con el chat): antes culpaba siempre a la transcripcion, y
+        # el caso real 2026-11-04 fue al reves (transcripcion 200,
+        # chat 404 por un modelo automatico no-chat). Mensaje neutro,
+        # sin culpar al paso equivocado.
         raise HTTPException(
             status_code=502,
-            detail="El proveedor no pudo transcribir el audio. Revisa que el "
-                   "proveedor ofrezca transcripcion y que el token sea valido.")
+            detail="El proveedor devolvio un error al procesar la pregunta "
+                   "por audio. Revisa el modelo elegido y que el token sea "
+                   "valido.")
     except ProviderResponseError:
         raise HTTPException(
             status_code=502,

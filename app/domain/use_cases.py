@@ -177,6 +177,48 @@ class IngestUseCase:
             self.jobs.save(job)
 
 
+class DeleteDocumentUseCase:
+    """Borra un documento completo: sus puntos en el vector store, sus
+    trabajos en el JobStore y su indice de hash, para que el mismo PDF
+    se pueda volver a ingerir despues sin que aparezca como duplicado.
+    Borra por document_id, no por nombre: dos ingestas del mismo nombre
+    son documentos distintos y se borran una por una. Si el documento
+    no existe en trabajos ni en el store, devuelve None y el endpoint
+    responde 404. Los archivos (PDF e imagenes) los borra el endpoint,
+    que es quien conoce storage, no el core."""
+
+    def __init__(self, store: VectorStorePort, jobs: JobStorePort):
+        self.store = store
+        self.jobs = jobs
+
+    def delete(self, document_id: str) -> dict | None:
+        jobs = [j for j in self.jobs.all()
+                if j.document_id == document_id]
+        chunks = [c for c in self.store.all_chunks()
+                  if c.document_id == document_id]
+        if not jobs and not chunks:
+            return None
+        document_name = jobs[0].document_name if jobs else chunks[0].document_name
+        image_ids = sorted({c.image_id for c in chunks if c.image_id})
+        removed_chunks = self.store.delete_document(document_id)
+        delete_by_document = getattr(self.jobs, "delete_by_document", None)
+        removed_jobs = []
+        if callable(delete_by_document):
+            removed_jobs = delete_by_document(document_id)
+        else:
+            removed_jobs = jobs
+        for job in removed_jobs:
+            if job.file_hash:
+                clear_hash = getattr(self.jobs, "clear_hash", None)
+                if callable(clear_hash):
+                    clear_hash(job.file_hash, job.id)
+        return {"document_id": document_id, "document_name": document_name,
+                "chunks_removed": removed_chunks,
+                "jobs_removed": len(removed_jobs),
+                "image_ids": image_ids,
+                "pdf_paths": [j.pdf_path for j in removed_jobs if j.pdf_path]}
+
+
 class AskUseCase:
     def __init__(self, llm: LLMPort, embedding: EmbeddingPort, store: VectorStorePort,
                  images_by_id: dict[str, str] | None = None):

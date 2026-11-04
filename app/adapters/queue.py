@@ -103,6 +103,16 @@ class InMemoryJobStore:
             if self._hash_index.get(file_hash) == job_id:
                 del self._hash_index[file_hash]
 
+    def delete_by_document(self, document_id: str) -> list[Job]:
+        with self._lock:
+            removed = [j for j in self._jobs.values()
+                       if j.document_id == document_id]
+            for job in removed:
+                del self._jobs[job.id]
+                if job.file_hash and self._hash_index.get(job.file_hash) == job.id:
+                    del self._hash_index[job.file_hash]
+            return removed
+
 
 class RedisJobStore:
     """JobStore compartido y persistente en Redis.
@@ -146,3 +156,15 @@ class RedisJobStore:
             "return redis.call('hdel', KEYS[1], ARGV[1]) else return 0 end"
         )
         self._redis.eval(script, 1, self._hash_key, file_hash, job_id)
+
+    def delete_by_document(self, document_id: str) -> list[Job]:
+        removed = [j for j in self.all() if j.document_id == document_id]
+        if not removed:
+            return []
+        removed_ids = {j.id for j in removed}
+        self._redis.hdel(self._jobs_key, *removed_ids)
+        hash_index = self._redis.hgetall(self._hash_key)
+        stale = [h for h, jid in hash_index.items() if jid in removed_ids]
+        if stale:
+            self._redis.hdel(self._hash_key, *stale)
+        return removed

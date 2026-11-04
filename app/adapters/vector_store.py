@@ -72,6 +72,14 @@ class InMemoryVectorStore:
     def sample_points(self, limit: int = 5) -> list[Chunk]:
         return list(self._chunks[:limit])
 
+    def delete_document(self, document_id: str) -> int:
+        before = len(self._chunks)
+        kept = [(c, v) for c, v in zip(self._chunks, self._vectors)
+                if c.document_id != document_id]
+        self._chunks = [c for c, _ in kept]
+        self._vectors = [v for _, v in kept]
+        return before - len(self._chunks)
+
 
 class QdrantVectorStore:
     """Adaptador Qdrant. La importacion es perezosa para que los tests y la
@@ -196,3 +204,28 @@ class QdrantVectorStore:
         except (UnexpectedResponse, httpx.HTTPError) as exc:
             raise _qdrant_error(exc) from exc
         return [_chunk_from_payload(pt.payload) for pt in points]
+
+    def delete_document(self, document_id: str) -> int:
+        """Borra por filtro document_id, no por ids de punto: los ids
+        de punto son UUID aleatorios y no se guardan en ningun indice.
+        Sin coleccion: 0, no error."""
+        from qdrant_client.http.exceptions import UnexpectedResponse
+        from qdrant_client.models import (
+            FieldCondition, Filter, FilterSelector, MatchValue)
+
+        if not self._collection_exists():
+            return 0
+        try:
+            before = self._client.count(
+                collection_name=self._collection,
+                count_filter=Filter(must=[FieldCondition(
+                    key="document_id",
+                    match=MatchValue(value=document_id))])).count
+            self._client.delete(
+                collection_name=self._collection,
+                points_selector=FilterSelector(filter=Filter(must=[
+                    FieldCondition(key="document_id",
+                                   match=MatchValue(value=document_id))])))
+            return int(before)
+        except (UnexpectedResponse, httpx.HTTPError) as exc:
+            raise _qdrant_error(exc) from exc

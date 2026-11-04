@@ -181,8 +181,31 @@ with st.sidebar:
         docs = httpx.get(f"{API_URL}/documents", timeout=10.0).json()
         st.session_state["docs"] = docs
     for doc in st.session_state.get("docs", []):
-        st.write(f"- {doc['document_name']} ({doc['chunks']} chunks, "
-                 f"{doc['images']} imagenes)")
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            st.write(f"- {doc['document_name']} ({doc['chunks']} chunks, "
+                     f"{doc['images']} imagenes)")
+        with col2:
+            if st.button("Eliminar", key=f"del-{doc['document_id']}"):
+                st.session_state["confirm_delete"] = doc["document_id"]
+        if st.session_state.get("confirm_delete") == doc["document_id"]:
+            st.warning("¿Borrar este PDF? Se borran sus chunks, sus "
+                       "trabajos y sus archivos. No se puede deshacer. "
+                       "Para volver a tenerlo, subelo de nuevo.")
+            if st.button("Si, borrar", key=f"confirm-{doc['document_id']}"):
+                resp = httpx.delete(
+                    f"{API_URL}/documents/{doc['document_id']}", timeout=30.0)
+                if resp.status_code == 200:
+                    st.success(f"Borrado: {doc['document_name']} "
+                               f"({resp.json()['chunks_removed']} chunks)")
+                else:
+                    st.error(f"No se pudo borrar: {resp.text}")
+                st.session_state["confirm_delete"] = None
+                st.session_state["docs"] = []
+                st.rerun()
+            if st.button("Cancelar", key=f"cancel-{doc['document_id']}"):
+                st.session_state["confirm_delete"] = None
+                st.rerun()
 
     st.header("Base vectorial")
     st.caption("Ver la coleccion real en Qdrant, fuera de esta pantalla. "
