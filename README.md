@@ -170,17 +170,6 @@ pdfplumber queda solo como respaldo si PyMuPDF falla en un PDF. Sin
 bounding boxes reales no habría chunking por layout ni "imagen más
 cercana" fiable: esa es la base de lo multimodal.
 
-### Por qué no Postgres
-No hay datos relacionales ni transacciones en este sistema: jobs son
-llave-valor con cola (Redis), vectores son busqueda por similitud
-(Qdrant) y PDFs/imagenes son archivos (storage). Agregar Postgres
-sin un caso de uso seria sobreingenieria: dos fuentes de verdad
-para los jobs, mas fallos y mas complejidad, sin ninguna consulta
-con joins que lo justifique. Postgres seria el paso correcto si el
-producto creciera a usuarios, permisos, facturacion o auditoria
-relacional, y en ese caso se agregaria por esa razon, no por
-apariencia.
-
 ### Recuperación híbrida
 Semántica (coseno sobre embeddings) + BM25 implementado en el proyecto
 (sin servicio externo). El puntaje final usa el coseno **crudo**, no
@@ -408,9 +397,7 @@ coincidencia de tokens, y nunca se presenta como semántico.
    por proceso: varios workers pueden consumir la misma cola sin
    duplicar jobs, y la API puede replicarse. Para escalar más allá
    de un host, el siguiente paso sería mover Redis y Qdrant a
-   servicios gestionados y `storage/` a un object store; Postgres
-   no es un requisito para demostrar 100 manuales en un host, solo
-   una opcion si se quisiera auditoria relacional aparte.
+   servicios gestionados y `storage/` a un object store.
 5. **Ingesta en lote:** subir 100 manuales son 100 jobs independientes;
    el progreso se consulta por `job_id` y un fallo no tumba los demás.
 
