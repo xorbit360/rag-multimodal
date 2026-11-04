@@ -37,11 +37,19 @@ def main() -> None:
     log.info("worker escuchando cola rag_ingest_jobs")
     while True:
         try:
-            _, job_id = client.blpop("rag_ingest_jobs")
+            # BLPOP con timeout 5 s, no indefinido: con timeout 0 el
+            # cliente redis-py cerraba el socket por timeout de lectura
+            # en el despliegue (verificado en vivo: reintentos cada
+            # 5-7 s sin procesar). Con 5 s el loop vuelve a bloquear
+            # y un job nuevo se procesa en menos de 5 s.
+            result = client.blpop("rag_ingest_jobs", timeout=5)
         except Exception:
             log.exception("worker: error leyendo de Redis, reintentando")
             time.sleep(2)
             continue
+        if result is None:
+            continue
+        _, job_id = result
         job = container.jobs.get(job_id)
         if job is None:
             log.warning("job desconocido en cola job_id=%s", job_id)
