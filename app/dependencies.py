@@ -25,9 +25,36 @@ class Container:
         os.makedirs(self.uploads_dir, exist_ok=True)
 
         self.parser = PyMuPDFParser(images_dir=self.images_dir)
-        if settings.embedding_provider == "openai" and settings.openai_api_key:
+        # Boveda de tokens: se crea ANTES de los embeddings, porque el
+        # token predeterminado del servidor (autorizado por el dueno)
+        # puede ser la llave para embeddings reales cuando el entorno
+        # no trae OPENAI_API_KEY. La construccion nunca falla por falta
+        # de clave; el fallo claro ocurre al guardar o usar.
+        token_store = (settings.token_store_dir
+                       or os.path.join(storage, "tokens"))
+        default_path = (settings.default_token_path
+                        or os.path.join(storage, "default_token.enc"))
+        self.token_vault = TokenVault(
+            store_dir=token_store,
+            encryption_key=settings.token_encryption_key,
+            default_path=default_path)
+        embedding_key = settings.openai_api_key
+        embedding_base_url = settings.openai_base_url
+        if settings.embedding_provider == "openai" and not embedding_key:
+            # Solo si el dueno autorizo un token predeterminado en el
+            # servidor: se usa su llave y su base_url (si la trae) para
+            # embeddings, nunca se registra ni se devuelve su valor.
+            try:
+                default_cfg = self.token_vault.load_default()
+            except Exception:
+                default_cfg = None
+            if default_cfg and default_cfg.get("api_key"):
+                embedding_key = default_cfg["api_key"]
+                if default_cfg.get("base_url"):
+                    embedding_base_url = default_cfg["base_url"]
+        if settings.embedding_provider == "openai" and embedding_key:
             self.embedding = OpenAICompatibleEmbedding(
-                api_key=settings.openai_api_key, base_url=settings.openai_base_url,
+                api_key=embedding_key, base_url=embedding_base_url,
                 model=settings.embedding_model, dimension=settings.embedding_dimension)
         else:
             self.embedding = HashEmbedding(dimension=settings.embedding_dimension)
@@ -55,17 +82,6 @@ class Container:
         else:
             self.jobs = InMemoryJobStore()
             self.queue = InMemoryJobQueue()
-        # Boveda de tokens: la construccion nunca falla por falta de
-        # clave; el fallo claro ocurre al guardar o usar. Los archivos
-        # viven bajo storage_dir (volumen persistente en compose).
-        token_store = (settings.token_store_dir
-                       or os.path.join(storage, "tokens"))
-        default_path = (settings.default_token_path
-                        or os.path.join(storage, "default_token.enc"))
-        self.token_vault = TokenVault(
-            store_dir=token_store,
-            encryption_key=settings.token_encryption_key,
-            default_path=default_path)
         self.ingest = IngestUseCase(self.parser, self.embedding, self.store,
                                     self.queue, self.jobs)
         self.ask = AskUseCase(self.llm, self.embedding, self.store)

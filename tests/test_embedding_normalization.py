@@ -36,6 +36,32 @@ def test_openai_embedding_truncates_to_configured_dimension():
     assert abs(norm - 1.0) < 1e-6
 
 
+def test_embedding_uses_default_token_when_env_key_missing(tmp_path):
+    """Autorizado por el dueno: sin OPENAI_API_KEY en el entorno, el
+    token predeterminado cifrado del servidor sirve para embeddings
+    reales, sin exponer su valor en logs ni respuestas."""
+    from cryptography.fernet import Fernet
+
+    from app.adapters.token_vault import TokenVault
+    from app.config import Settings
+    from app.dependencies import Container
+
+    key = Fernet.generate_key().decode()
+    vault = TokenVault(store_dir=str(tmp_path / "tokens"),
+                       encryption_key=key,
+                       default_path=str(tmp_path / "default_token.enc"))
+    vault.save_default({"api_key": "fake-default-key", "provider": "openai",
+                        "base_url": None, "model": "gpt-4o-mini",
+                        "auto_model": False})
+    settings = Settings(
+        storage_dir=str(tmp_path), embedding_provider="openai",
+        openai_api_key="", token_encryption_key=key,
+        vector_store="memory", queue_backend="memory", demo_mode=True)
+    container = Container(settings)
+    assert isinstance(container.embedding, OpenAICompatibleEmbedding)
+    assert container.embedding.api_key == "fake-default-key"
+
+
 def test_hash_embedding_is_not_openai():
     assert not isinstance(HashEmbedding(), OpenAICompatibleEmbedding)
     assert isinstance(
