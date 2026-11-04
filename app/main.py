@@ -122,6 +122,16 @@ def ingest(file: UploadFile = File(...)):
     return _job_out(job)
 
 
+@app.get("/jobs", response_model=list[JobOut])
+def list_jobs():
+    """Lista de trabajos, SOLO lectura. Es la vista que usa el menu
+    aparte 'Trabajos' del frontend: muestra lo que hay en el JobStore
+    (Redis en docker-compose, memoria en local) sin permitir crear,
+    borrar ni editar nada. JobOut no incluye pdf_path ni secretos:
+    solo documento, estado, progreso, chunks, imagenes y error."""
+    return [_job_out(job) for job in container.jobs.all()]
+
+
 @app.get("/jobs/{job_id}", response_model=JobOut)
 def get_job(job_id: str):
     job = container.jobs.get(job_id)

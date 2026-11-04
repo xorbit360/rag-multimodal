@@ -23,7 +23,7 @@ software lista para despliegue en producción."
 | 2. Procesamiento Asíncrono | Procesamiento en segundo plano, no bloquear el hilo principal; `job_id` al subir y endpoint de progreso Pending / Processing / Completed / Failed; extracción multimodal (texto, tablas, imágenes); bounding boxes para correlacionar texto y contexto visual | `POST /ingest` devuelve `job_id` al instante, `GET /jobs/<job_id>` da el estado, `app/worker.py` consume de Redis y re-ejecuta la ingesta, `app/adapters/pdf_parser.py` guarda bbox por bloque e imagen. |
 | 3. Motor RAG | Chunking por semántica o layout, no solo por caracteres; base de datos vectorial; recuperación híbrida (semántica + palabras clave); detectar imágenes asociadas a los chunks; generación defensiva, admitir explícitamente cuando no hay información suficiente | `app/adapters/chunking.py` (por layout, tablas como chunk propio), Qdrant (`VECTOR_STORE=qdrant`), `app/domain/retrieval.py` (híbrida, umbral 0.15), imagen más cercana por bbox, prompt defensivo con la frase exacta de negativa. |
 | 4. Pruebas y Resiliencia | Pruebas unitarias aislando terceros, con mocks para LLM y base vectorial; retries / Circuit Breaker para caídas, rate limits y timeouts; logging con trazabilidad | `tests/` con mocks, `app/infrastructure/resilience.py` (retry con backoff + jitter, circuit breaker 3 fallos → 30 s), logging con `job_id` / `question_id`. |
-| 5. Interfaz y Experiencia | Chat interactivo con historial y Markdown; imagen más cercana junto a la respuesta cuando depende de un diagrama; metadatos explícitos "Fuente: Manual_Motor.pdf, Página 12" | `frontend/app.py` (Streamlit): chat, historial, Markdown, imagen junto a la respuesta, fuente con documento y página. |
+| 5. Interfaz y Experiencia | Chat interactivo con historial y Markdown; imagen más cercana junto a la respuesta cuando depende de un diagrama; metadatos explícitos "Fuente: Manual_Motor.pdf, Página 12" | `frontend/app.py` (Streamlit): chat, historial, Markdown, imagen junto a la respuesta, fuente con documento y página. El menu aparte `frontend/pages/2_Trabajos.py` muestra los trabajos de Redis en solo lectura, sin contaminar la visual del chat. |
 | Entregables: Repositorio | Código versionado en GitHub o GitLab, con commits semánticos e historial lógico | Este repositorio, rama main, commits semánticos. |
 | Entregables: Entorno Contenerizado | `docker-compose.yml` funcional que orqueste API, frontend y servicios auxiliares con un solo comando | `docker compose up --build`: api + worker + frontend + Qdrant + Redis. |
 | Entregables: README | Diagrama de arquitectura, registro de decisiones, instrucciones para arrancar y ejecutar tests | Este README: diagrama abajo, sección Decisiones, Arranque y Tests. |
@@ -436,7 +436,8 @@ app/
                           #   (memoria/Redis + JobStore Redis)
   worker.py               # worker Redis: consume job_id y re-ejecuta
   infrastructure/         # resilience, logging
-frontend/app.py           # Streamlit
+frontend/app.py           # Streamlit (chat)
+frontend/pages/2_Trabajos.py  # Streamlit (menu aparte: trabajos Redis, solo lectura)
 examples/
   generate_manual.py      # genera el PDF de ejemplo (12 paginas)
   Manual_Motor.pdf        # PDF de ejemplo (inventado para la prueba)
@@ -444,10 +445,3 @@ examples/
 tests/                    # pytest con mocks, sin red ni llaves
 docker-compose.yml        # api + frontend + qdrant + redis
 ```
-
-## Sin N8N, a propósito
-
-La prueba pide arquitectura limpia, DI y tests con mocks. Un flujo
-visual escondería esa lógica y no se podría testear ni versionar igual.
-La asincronía se resuelve con la cola del proyecto, no con un
-orquestador externo.
