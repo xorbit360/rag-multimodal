@@ -47,7 +47,12 @@ except Exception as exc:
     jobs = []
 
 if not jobs:
-    st.info("No hay trabajos registrados en el JobStore.")
+    st.info(
+        "No hay trabajos registrados en el JobStore en este momento. "
+        "Los trabajos aparecen aqui cuando se ingiere un PDF nuevo; "
+        "los documentos ya indexados siguen abajo, en la seccion de "
+        "documentos, aunque el registro de trabajos se haya reiniciado."
+    )
 else:
     rows = [
         {
@@ -64,6 +69,28 @@ else:
         for j in jobs
     ]
     st.dataframe(rows, use_container_width=True, hide_index=True)
+
+st.header("Documentos indexados")
+try:
+    docs = httpx.get(f"{API_URL}/documents", timeout=10.0).json()
+    if not docs:
+        st.info("No hay documentos indexados.")
+    else:
+        st.dataframe(
+            [
+                {
+                    "Documento": d["document_name"],
+                    "Chunks": d["chunks"],
+                    "Imagenes": d["images"],
+                    "Estado": d["status"],
+                }
+                for d in docs
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+except Exception as exc:
+    st.error(f"No se pudieron listar los documentos: {exc}")
 
 st.header("Ficha tecnica del vector store")
 try:
