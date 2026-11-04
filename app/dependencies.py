@@ -6,7 +6,9 @@ import os
 from app.adapters.embeddings import HashEmbedding, OpenAICompatibleEmbedding
 from app.adapters.llm import FakeLLM, OpenAICompatibleLLM
 from app.adapters.pdf_parser import PyMuPDFParser
-from app.adapters.queue import InMemoryJobQueue, InMemoryJobStore, RedisJobQueue
+from app.adapters.queue import (
+    InMemoryJobQueue, InMemoryJobStore, RedisJobQueue, RedisJobStore,
+)
 from app.adapters.token_vault import TokenVault
 from app.adapters.vector_store import InMemoryVectorStore, QdrantVectorStore
 from app.config import Settings
@@ -44,9 +46,15 @@ class Container:
                 api_key=settings.openai_api_key, base_url=settings.openai_base_url,
                 model=settings.openai_model)
 
-        self.jobs = InMemoryJobStore()
-        self.queue = (RedisJobQueue(settings.redis_url) if settings.queue_backend == "redis"
-                      else InMemoryJobQueue())
+        # Senior: el JobStore acompana a la cola. Con Redis, API y
+        # workers comparten el mismo estado persistente; con memoria,
+        # el estado vive solo en el proceso (modo local / tests).
+        if settings.queue_backend == "redis":
+            self.jobs = RedisJobStore(settings.redis_url)
+            self.queue = RedisJobQueue(settings.redis_url)
+        else:
+            self.jobs = InMemoryJobStore()
+            self.queue = InMemoryJobQueue()
         # Boveda de tokens: la construccion nunca falla por falta de
         # clave; el fallo claro ocurre al guardar o usar. Los archivos
         # viven bajo storage_dir (volumen persistente en compose).

@@ -1,15 +1,24 @@
 """Worker para QUEUE_BACKEND=redis.
 
-Consume job_ids de Redis y re-ejecuta la ingesta desde el archivo ya
-guardado en storage/uploads. En produccion, storage debe ser un volumen
-compartido entre API y workers (o un object store), y el JobStore debe
-ser una base de datos, no el InMemoryJobStore de la demo.
+Consume job_ids de Redis y re-ejecuta la ingesta de verdad desde el
+archivo ya guardado en storage/uploads, usando el JobStore compartido
+(RedisJobStore). Por eso API y workers pueden vivir en contenedores
+distintos: el estado, la ruta del PDF y el indice de hash son los
+mismos para ambos, y un reinicio de la API no pierde los jobs en
+curso (Redis con appendonly en docker-compose).
 
 Uso: QUEUE_BACKEND=redis python -m app.worker
+
+Requisitos de despliegue: storage/ debe ser un volumen compartido
+entre API y workers (en docker-compose es rag_storage), y Qdrant y
+Redis deben ser alcanzables con la misma configuracion que la API.
 """
 from __future__ import annotations
 
 import logging
+import os
+import sys
+import time
 
 import redis
 
@@ -27,15 +36,32 @@ def main() -> None:
     client = redis.Redis.from_url(settings.redis_url, decode_responses=True)
     log.info("worker escuchando cola rag_ingest_jobs")
     while True:
-        _, job_id = client.blpop("rag_ingest_jobs")
+        try:
+            _, job_id = client.blpop("rag_ingest_jobs")
+        except Exception:
+            log.exception("worker: error leyendo de Redis, reintentando")
+            time.sleep(2)
+            continue
         job = container.jobs.get(job_id)
         if job is None:
             log.warning("job desconocido en cola job_id=%s", job_id)
             continue
-        # El worker de la demo comparte el mismo proceso de arranque que la
-        # API solo en desarrollo; en despliegue real, el JobStore es externo.
-        log.info("worker procesando job_id=%s", job_id)
+        if not job.pdf_path or not os.path.exists(job.pdf_path):
+            log.error("worker: job sin archivo job_id=%s pdf_path=%s",
+                      job_id, job.pdf_path)
+            # run() marcara el job como FAILED con un mensaje claro.
+            container.ingest.run(job_id)
+            continue
+        log.info("worker procesando job_id=%s document=%s",
+                 job_id, job.document_name)
+        try:
+            container.ingest.run(job_id, job.pdf_path, job.document_name)
+        except Exception:
+            log.exception("worker: fallo inesperado job_id=%s", job_id)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(0)

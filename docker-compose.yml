@@ -10,11 +10,18 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      # Embeddings: "openai" usa el adaptador OpenAI-compatible real
+      # (semantico, con la llave de .env); "hash" es el fallback
+      # determinista, offline y sin costo, etiquetado como tal en
+      # /data/overview y en el README. Nunca se presenta el hash
+      # como embedding semantico.
       - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-hash}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
       - VECTOR_STORE=${VECTOR_STORE:-qdrant}
       - QDRANT_URL=http://qdrant:6333
       - QDRANT_COLLECTION=rag_chunks
-      - QUEUE_BACKEND=memory
+      - QUEUE_BACKEND=${QUEUE_BACKEND:-redis}
+      - REDIS_URL=redis://redis:6379/0
       - STORAGE_DIR=/app/storage
       - DEMO_MODE=${DEMO_MODE:-true}
       # Clave Fernet para el guardado de tokens en el servidor. Vacia =
@@ -25,7 +32,34 @@ services:
       - rag_storage:/app/storage
     depends_on:
       - qdrant
+      - redis
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-hash}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+      - VECTOR_STORE=${VECTOR_STORE:-qdrant}
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_COLLECTION=rag_chunks
+      - QUEUE_BACKEND=${QUEUE_BACKEND:-redis}
+      - REDIS_URL=redis://redis:6379/0
+      - STORAGE_DIR=/app/storage
+      - DEMO_MODE=${DEMO_MODE:-true}
+      - TOKEN_ENCRYPTION_KEY=${TOKEN_ENCRYPTION_KEY:-}
+    volumes:
+      - rag_storage:/app/storage
+    depends_on:
+      - qdrant
+      - redis
+    command: python -m app.worker
 
   frontend:
     build:
@@ -50,10 +84,14 @@ services:
     image: redis:7-alpine
     ports:
       - "6379:6379"
-    # Reservado para la cola Redis (QUEUE_BACKEND=redis + worker).
-    # En la configuracion por defecto la API usa la cola en memoria con
-    # hilos; Redis queda disponible sin romper el arranque en un comando.
+    volumes:
+      - redis_data:/data
+    # Persistencia: con appendonly, los jobs de RedisJobStore y la
+    # cola sobreviven a un reinicio del contenedor. Sin esto, la
+    # cola Redis seria tan volatil como la memoria.
+    command: redis-server --appendonly yes
 
 volumes:
   rag_storage:
   qdrant_storage:
+  redis_data:

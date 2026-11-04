@@ -37,21 +37,43 @@ class IngestUseCase:
         self.store = store
         self.queue = queue
         self.jobs = jobs
-        # Indice hash SHA-256 del PDF -> job canonico. Vive en memoria por
-        # proceso, igual que el JobStore: si el proceso reinicia, el indice
-        # se reconstruye con las ingestas nuevas (el vector store persiste
-        # aparte segun el adaptador configurado).
+        # Indice hash SHA-256 del PDF -> job canonico. Cuando el JobStore
+        # lo soporta (RedisJobStore / InMemoryJobStore), el indice vive
+        # en el propio store y sobrevive al proceso; si no, se usa este
+        # diccionario local solo como respaldo. Nunca se reconstruye
+        # perdiendo deduplicacion: el vector store persiste aparte.
         self._hash_index: dict[str, str] = {}
         self._hash_lock = threading.Lock()
+
+    def _get_by_hash(self, file_hash: str) -> Job | None:
+        get_by_hash = getattr(self.jobs, "get_by_hash", None)
+        if callable(get_by_hash):
+            return get_by_hash(file_hash)
+        with self._hash_lock:
+            canonical = self._hash_index.get(file_hash)
+        return self.jobs.get(canonical) if canonical else None
+
+    def _set_hash(self, file_hash: str, job_id: str) -> None:
+        # RedisJobStore / InMemoryJobStore ya indexan en save(); el
+        # diccionario local solo se mantiene para stores antiguos.
+        if not hasattr(self.jobs, "get_by_hash"):
+            with self._hash_lock:
+                self._hash_index[file_hash] = job_id
+
+    def _clear_hash(self, file_hash: str, job_id: str) -> None:
+        clear_hash = getattr(self.jobs, "clear_hash", None)
+        if callable(clear_hash):
+            clear_hash(file_hash, job_id)
+            return
+        with self._hash_lock:
+            if self._hash_index.get(file_hash) == job_id:
+                del self._hash_index[file_hash]
 
     def start(self, pdf_path: str, document_name: str,
               file_hash: str | None = None) -> Job:
         if file_hash:
-            with self._hash_lock:
-                canonical = self._hash_index.get(file_hash)
-            if canonical:
-                existing = self.jobs.get(canonical)
-                if existing is not None and existing.status != JobStatus.FAILED:
+            existing = self._get_by_hash(file_hash)
+            if existing is not None and existing.status != JobStatus.FAILED:
                     if existing.status == JobStatus.COMPLETED:
                         # Guardado inteligente: no se duplica nada. Se devuelve
                         # un job nuevo ya completado que apunta al documento
@@ -75,11 +97,10 @@ class IngestUseCase:
                              file_hash[:12], existing.id)
                     return existing
         job = Job(id=str(uuid.uuid4()), document_name=document_name,
-                  file_hash=file_hash)
+                  file_hash=file_hash, pdf_path=pdf_path)
         self.jobs.save(job)
         if file_hash:
-            with self._hash_lock:
-                self._hash_index[file_hash] = job.id
+            self._set_hash(file_hash, job.id)
 
         def _run() -> None:
             self.run(job.id, pdf_path, document_name)
@@ -96,18 +117,28 @@ class IngestUseCase:
         La usa el seed del manual de ejemplo en el arranque; la subida
         por UI sigue usando start() (asincrona)."""
         job = Job(id=str(uuid.uuid4()), document_name=document_name,
-                  file_hash=file_hash)
+                  file_hash=file_hash, pdf_path=pdf_path)
         self.jobs.save(job)
         if file_hash:
-            with self._hash_lock:
-                self._hash_index[file_hash] = job.id
+            self._set_hash(file_hash, job.id)
         self.run(job.id, pdf_path, document_name)
         saved = self.jobs.get(job.id)
         return saved if saved is not None else job
 
-    def run(self, job_id: str, pdf_path: str, document_name: str) -> None:
+    def run(self, job_id: str, pdf_path: str | None = None,
+            document_name: str | None = None) -> None:
         job = self.jobs.get(job_id)
         if job is None:
+            return
+        # El worker Redis llega solo con el job_id: la ruta del PDF
+        # guardada en el propio Job es la fuente de verdad.
+        pdf_path = pdf_path or job.pdf_path
+        document_name = document_name or job.document_name
+        if not pdf_path:
+            job.status = JobStatus.FAILED
+            job.error = "Job sin pdf_path: no se puede re-ejecutar"
+            job.message = "Fallo en la ingesta"
+            self.jobs.save(job)
             return
         try:
             job.status = JobStatus.PROCESSING
@@ -140,9 +171,7 @@ class IngestUseCase:
             # Un fallo libera el hash: un reintento posterior debe poder
             # volver a ingerir el mismo archivo.
             if job.file_hash:
-                with self._hash_lock:
-                    if self._hash_index.get(job.file_hash) == job.id:
-                        del self._hash_index[job.file_hash]
+                self._clear_hash(job.file_hash, job.id)
             log.exception("ingesta fallida job_id=%s error=%s", job_id, exc)
         finally:
             self.jobs.save(job)

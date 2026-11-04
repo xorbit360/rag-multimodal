@@ -92,6 +92,11 @@ class Job:
     file_hash: Optional[str] = None
     # True cuando este job reutilizo una ingesta anterior (mismo hash).
     duplicate: bool = False
+    # Ruta del PDF ya guardado en storage/uploads. Sin ella, un worker
+    # en otro proceso no podria re-ejecutar la ingesta: es el dato que
+    # hace que la cola Redis sea real y no solo un log. Nunca se expone
+    # en la API (JobOut no lo incluye).
+    pdf_path: str | None = None
 
 
 @dataclass

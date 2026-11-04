@@ -8,6 +8,30 @@ imagen más cercana.
 > **Documento de ejemplo:** `examples/Manual_Motor.pdf` es un manual
 > inventado para la prueba. No es un manual real de ningún fabricante.
 
+## Cumplimiento del enunciado, punto por punto
+
+Texto del PDF: "Prueba Técnica: Sistema RAG Multimodal",
+perfil Ingeniero de Software (Integración IA), duración sugerida
+48 horas, expectativa clave: "No buscamos un simple script lineal
+de Python. Esperamos una solución estructurada que demuestre cómo
+se integra la Inteligencia Artificial dentro de una arquitectura de
+software lista para despliegue en producción."
+
+| Sección del PDF | Qué pide, tal cual | Dónde se cumple, con evidencia |
+|---|---|---|
+| 1. Arquitectura y Diseño | Arquitectura limpia (Hexagonal o por Capas); separar transporte, lógica de negocio e integraciones; Inyección de Dependencias para cambiar LLM o base vectorial sin tocar el core; variables de entorno (.env) y configuración por ambiente | `app/main.py` (solo transporte), `app/domain/` (casos de uso), `app/adapters/` (proveedores), `app/dependencies.py` (wiring por .env), `app/config.py` (pydantic-settings). Cambiar OpenAI por Ollama es solo `OPENAI_BASE_URL` / modelo. |
+| 2. Procesamiento Asíncrono | Procesamiento en segundo plano, no bloquear el hilo principal; `job_id` al subir y endpoint de progreso Pending / Processing / Completed / Failed; extracción multimodal (texto, tablas, imágenes); bounding boxes para correlacionar texto y contexto visual | `POST /ingest` devuelve `job_id` al instante, `GET /jobs/<job_id>` da el estado, `app/worker.py` consume de Redis y re-ejecuta la ingesta, `app/adapters/pdf_parser.py` guarda bbox por bloque e imagen. |
+| 3. Motor RAG | Chunking por semántica o layout, no solo por caracteres; base de datos vectorial; recuperación híbrida (semántica + palabras clave); detectar imágenes asociadas a los chunks; generación defensiva, admitir explícitamente cuando no hay información suficiente | `app/adapters/chunking.py` (por layout, tablas como chunk propio), Qdrant (`VECTOR_STORE=qdrant`), `app/domain/retrieval.py` (híbrida, umbral 0.15), imagen más cercana por bbox, prompt defensivo con la frase exacta de negativa. |
+| 4. Pruebas y Resiliencia | Pruebas unitarias aislando terceros, con mocks para LLM y base vectorial; retries / Circuit Breaker para caídas, rate limits y timeouts; logging con trazabilidad | `tests/` con mocks, `app/infrastructure/resilience.py` (retry con backoff + jitter, circuit breaker 3 fallos → 30 s), logging con `job_id` / `question_id`. |
+| 5. Interfaz y Experiencia | Chat interactivo con historial y Markdown; imagen más cercana junto a la respuesta cuando depende de un diagrama; metadatos explícitos "Fuente: Manual_Motor.pdf, Página 12" | `frontend/app.py` (Streamlit): chat, historial, Markdown, imagen junto a la respuesta, fuente con documento y página. |
+| Entregables: Repositorio | Código versionado en GitHub o GitLab, con commits semánticos e historial lógico | Este repositorio, rama main, commits semánticos. |
+| Entregables: Entorno Contenerizado | `docker-compose.yml` funcional que orqueste API, frontend y servicios auxiliares con un solo comando | `docker compose up --build`: api + worker + frontend + Qdrant + Redis. |
+| Entregables: README | Diagrama de arquitectura, registro de decisiones, instrucciones para arrancar y ejecutar tests | Este README: diagrama abajo, sección Decisiones, Arranque y Tests. |
+| Entregables: Demostración | Un breve video (Loom/YouTube) **o** un despliegue en la nube probando el sistema con un documento técnico de ejemplo | Despliegue en nube (esta opción del enunciado, no video): demo pública con el manual de ejemplo precargado, sin instalar nada. |
+
+Nada de lo anterior se presenta como hecho si no lo está: los
+límites que quedan se declaran en su sección, no se esconden.
+
 ## Arranque con un solo comando
 
 ```bash
@@ -99,9 +123,12 @@ python examples/generate_manual.py
 flowchart LR
     UI[Streamlit] --> API[FastAPI - transporte]
     API --> UC[Casos de uso<br/>Ingest / Ask]
-    UC --> Ports[Ports<br/>LLM / Embeddings / VectorStore / Parser / Queue]
+    UC --> Ports[Ports<br/>LLM / Embeddings / VectorStore / Parser / Queue / JobStore]
     Ports --> Adapters[Adaptadores]
-    Adapters --> Ext[PyMuPDF<br/>Qdrant / memoria<br/>OpenAI / OpenRouter / Ollama<br/>Redis]
+    Adapters --> Ext[PyMuPDF<br/>Qdrant / memoria<br/>OpenAI / OpenRouter / Ollama<br/>Redis: cola + JobStore]
+    API -. job_id .-> Redis[Redis]
+    Redis -. job_id .-> Worker[Worker<br/>python -m app.worker]
+    Worker --> UC
 ```
 
 | Capa | Contenido |
@@ -289,9 +316,11 @@ mismo PDF ya fue ingerido, no duplica chunks: devuelve un job ya
 completado que apunta al documento original, con el aviso "Documento ya
 indexado" y `duplicate: true`. Si la ingesta anterior sigue en curso,
 se devuelve ese mismo job para seguirlo por polling. Si fallo, el hash
-se libera y un reintento vuelve a ingerir. El indice hash vive en
-memoria por proceso, igual que el JobStore: tras un reinicio se
-reconstruye con las ingestas nuevas.
+se libera y un reintento vuelve a ingerir. Con `QUEUE_BACKEND=redis`
+(el valor por defecto en docker-compose), el indice hash vive en el
+propio JobStore de Redis, compartido por API y workers, y sobrevive
+a un reinicio (Redis con appendonly). Con `QUEUE_BACKEND=memory`
+(modo local / tests), el indice vive en el proceso.
 
 ### Responsive movil
 El frontend usa `initial_sidebar_state="auto"` (barra colapsable en
@@ -315,12 +344,13 @@ ejemplo) y existe SOLO en modo demo (fuera de el devuelve 404).
 
 ### Lista de documentos tras un reinicio
 `GET /documents` une el registro de jobs con el contenido real del
-vector store: el registro vive en memoria y se pierde al reiniciar el
-contenedor, pero los chunks persisten en Qdrant. Sin esta union, tras
-un reinicio la lista salia vacia aunque el store tuviera los puntos.
-Los jobs mandan cuando existen (para no duplicar ni perder el estado
-de una ingesta en curso); si el store no responde, se devuelve solo
-lo de los jobs, nunca un 500.
+vector store. Con `QUEUE_BACKEND=redis`, los jobs ya no se pierden
+al reiniciar la API (viven en Redis con appendonly); la union con
+Qdrant sigue siendo el respaldo para documentos cuyos jobs ya no
+están, para que la lista nunca salga vacia aunque el store tenga
+los puntos. Los jobs mandan cuando existen (para no duplicar ni
+perder el estado de una ingesta en curso); si el store no responde,
+se devuelve solo lo de los jobs, nunca un 500.
 
 ### Cliente Qdrant: query_points (no .search)
 La busqueda semantica usa `query_points`, la API vigente de
@@ -331,10 +361,15 @@ el 500 visto en vivo). Por eso `requirements.txt` fija
 una futura version mayor que vuelva a romper la API.
 
 ### Embeddings
-En producción: OpenAI / Ollama vía el mismo adaptador compatible. En
-tests/demo: embedding por hash determinista (384 dim, offline, gratis).
-No se recomienda el hash para producción: no entiende sinónimos ni
-semántica real, solo coincidencia de tokens.
+En producción: OpenAI / Ollama vía el mismo adaptador compatible
+(`EMBEDDING_PROVIDER=openai` + llave en `.env`, modelo
+`text-embedding-3-small` por defecto, probado con mocks y con la
+selección de adaptador en `tests/test_senior_persistence.py`).
+En tests/demo sin llave: embedding por hash determinista (384 dim,
+offline, gratis), etiquetado en `/data/overview` como
+"hash (384 dims, solo demo)". No se recomienda el hash para
+producción: no entiende sinónimos ni semántica real, solo
+coincidencia de tokens, y nunca se presenta como semántico.
 
 ## Cómo escala a 100 manuales
 
@@ -342,17 +377,20 @@ semántica real, solo coincidencia de tokens.
    el trabajo pesado corre en la cola, no en el hilo de la API. No hay
    timeouts por PDFs grandes.
 2. **API sin estado:** el estado de jobs y los vectores viven fuera del
-   proceso (Qdrant + JobStore externo en producción). Se pueden levantar
-   varias réplicas de la API detrás de un balanceador.
+   proceso (Qdrant + RedisJobStore). Se pueden levantar varias
+   réplicas de la API detrás de un balanceador.
 3. **Vectorial externo:** Qdrant, no un índice en memoria, con
    colecciones por documento si hace falta aislamiento.
-4. **Cola con workers:** la interfaz `JobQueuePort` ya existe; la
-   implementación en memoria usa un pool de hilos y `RedisJobQueue`
-   encola en Redis para que N workers consuman (`app/worker.py`).
-   **Límite honesto actual:** el `JobStore` en memoria es por proceso;
-   para multi-worker real hay que moverlo a una base de datos (Postgres)
-   y compartir `storage/` por volumen u object store. Está documentado
-   como siguiente paso, no fingido como hecho.
+4. **Cola con workers reales:** `QUEUE_BACKEND=redis` (por defecto en
+   docker-compose) usa `RedisJobQueue` + `RedisJobStore`: la API solo
+   encola el `job_id` y guarda el Job completo (incluida la ruta del
+   PDF en el volumen compartido `rag_storage`), y N workers
+   (`app/worker.py`, servicio `worker` en compose) consumen y
+   re-ejecutan la ingesta de verdad desde ese Job. Redis corre con
+   appendonly y volumen `redis_data`, así que jobs y cola sobreviven
+   a un reinicio. Para escalar más allá de un host, el siguiente paso
+   sería mover el JobStore a Postgres y `storage/` a un object store;
+   eso ya no es necesario para demostrar 100 manuales en un host.
 5. **Ingesta en lote:** subir 100 manuales son 100 jobs independientes;
    el progreso se consulta por `job_id` y un fallo no tumba los demás.
 
@@ -374,8 +412,12 @@ pytest -q
 Sin llave de API real y sin internet. Cubren: chunking por layout,
 retrieval híbrido (BM25 + semántico), generación defensiva (sin
 contexto → negativa explícita, fuera de contexto → negativa),
-retry/circuit breaker, parser con bounding boxes e imágenes, y
-endpoints (`/ingest`, `/jobs`, `/ask`) con la cola en memoria.
+retry/circuit breaker, parser con bounding boxes e imágenes,
+endpoints (`/ingest`, `/jobs`, `/ask`) con la cola en memoria, y
+persistencia senior (`tests/test_senior_persistence.py`): JobStore
+en Redis que sobrevive a una nueva instancia, worker que re-ejecuta
+una ingesta solo con el `job_id`, y selección de embeddings reales
+cuando hay llave frente al fallback hash cuando no la hay.
 
 ## Estructura
 
@@ -387,6 +429,8 @@ app/
   domain/                 # modelos, ports, retrieval, casos de uso
   adapters/               # pdf_parser, chunking, embeddings, llm,
                           #   vector_store (memoria/Qdrant), queue
+                          #   (memoria/Redis + JobStore Redis)
+  worker.py               # worker Redis: consume job_id y re-ejecuta
   infrastructure/         # resilience, logging
 frontend/app.py           # Streamlit
 examples/
