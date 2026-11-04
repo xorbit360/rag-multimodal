@@ -152,3 +152,25 @@ class DetectResponse(BaseModel):
     models: list[str] = []
     models_info: list[ModelInfoOut] = []
     message: str
+
+
+class SamplePointOut(BaseModel):
+    """Un punto de ejemplo de la base de vectores, sin el vector: solo
+    el texto y sus metadatos, que ya son visibles en las respuestas."""
+    document_name: str
+    page: int
+    kind: str
+    section: str = ""
+    text: str
+
+
+class DataOverviewOut(BaseModel):
+    """Panel de datos solo lectura: que hay guardado en la base de
+    vectores y como se ve. Nunca incluye secretos ni permite
+    modificar nada."""
+    vector_store: str
+    collection: str
+    points: int
+    dimension: int
+    embedding: str
+    samples: list[SamplePointOut]

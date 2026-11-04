@@ -402,6 +402,26 @@ with st.sidebar:
     components.html(bridge, height=0)
     st.session_state.pop("clear_token_field", None)
 
+    st.header("Base de datos (solo lectura)")
+    st.caption("Para el evaluador: que hay guardado en la base de vectores y como se ve. Solo lectura: no se puede borrar ni modificar nada desde aqui.")
+    if st.button("Ver base de datos"):
+        try:
+            resp = httpx.get(f"{API_URL}/data/overview", timeout=30.0)
+            if resp.status_code != 200:
+                st.error(f"No se pudo cargar: {_error_detail(resp)[:300]}")
+            else:
+                data = resp.json()
+                st.write(f"Motor: {data['vector_store']} — Coleccion: {data['collection']}")
+                st.write(f"Puntos guardados: {data['points']} — Dimension del vector: {data['dimension']}")
+                st.write(f"Embedding: {data['embedding']}")
+                if not data["samples"]:
+                    st.write("Aun no hay documentos guardados.")
+                for s in data["samples"]:
+                    st.caption(f"{s['document_name']}, pagina {s['page']} ({s['kind']}) — {s['section']}")
+                    st.write(s["text"])
+        except Exception as exc:
+            st.error(f"No se pudo cargar: {exc}")
+
 if "history" not in st.session_state:
     st.session_state["history"] = []
 

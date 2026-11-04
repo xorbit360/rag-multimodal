@@ -35,6 +35,15 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / (na * nb)
 
 
+def _chunk_from_payload(p: dict) -> Chunk:
+    """Chunk desde el payload de un punto Qdrant. El bbox no se guarda
+    en Qdrant (queda en el PDF): se reconstruye como None."""
+    return Chunk(id=p["chunk_id"], document_id=p["document_id"],
+                 document_name=p["document_name"], page=p["page"],
+                 text=p["text"], bbox=None, kind=p.get("kind", "text"),
+                 image_id=p.get("image_id"), section=p.get("section", ""))
+
+
 class InMemoryVectorStore:
     def __init__(self):
         self._chunks: list[Chunk] = []
@@ -54,6 +63,14 @@ class InMemoryVectorStore:
 
     def all_chunks(self) -> list[Chunk]:
         return list(self._chunks)
+
+    def stats(self) -> dict:
+        dim = len(self._vectors[0]) if self._vectors else 0
+        return {"collection": "memory", "points": len(self._chunks),
+                "dimension": dim}
+
+    def sample_points(self, limit: int = 5) -> list[Chunk]:
+        return list(self._chunks[:limit])
 
 
 class QdrantVectorStore:
@@ -107,18 +124,19 @@ class QdrantVectorStore:
         if not self._collection_exists():
             return []
         try:
-            results = self._client.search(
-                collection_name=self._collection, query_vector=vector, limit=top_k)
+            # query_points es la API vigente desde qdrant-client 1.14:
+            # .search() fue eliminado en 1.20 y toda pregunta fallaba
+            # con AttributeError antes de llamar al LLM.
+            resp = self._client.query_points(
+                collection_name=self._collection, query=vector, limit=top_k)
+            results = resp.points
         except (UnexpectedResponse, httpx.HTTPError) as exc:
             raise _qdrant_error(exc) from exc
         out: list[RetrievedChunk] = []
         for r in results:
-            p = r.payload
-            chunk = Chunk(id=p["chunk_id"], document_id=p["document_id"],
-                          document_name=p["document_name"], page=p["page"],
-                          text=p["text"], bbox=None, kind=p.get("kind", "text"),
-                          image_id=p.get("image_id"), section=p.get("section", ""))
-            out.append(RetrievedChunk(chunk=chunk, semantic_score=float(r.score)))
+            out.append(RetrievedChunk(
+                chunk=_chunk_from_payload(r.payload),
+                semantic_score=float(r.score)))
         return out
 
     def all_chunks(self) -> list[Chunk]:
@@ -136,14 +154,45 @@ class QdrantVectorStore:
                     collection_name=self._collection, limit=100, offset=offset,
                     with_payload=True)
                 for pt in points:
-                    p = pt.payload
-                    chunks.append(Chunk(id=p["chunk_id"], document_id=p["document_id"],
-                                        document_name=p["document_name"], page=p["page"],
-                                        text=p["text"], bbox=None, kind=p.get("kind", "text"),
-                                        image_id=p.get("image_id"),
-                                        section=p.get("section", "")))
+                    chunks.append(_chunk_from_payload(pt.payload))
                 if offset is None:
                     break
         except (UnexpectedResponse, httpx.HTTPError) as exc:
             raise _qdrant_error(exc) from exc
         return chunks
+
+    def stats(self) -> dict:
+        """Solo lectura, para el panel de datos: coleccion, puntos y
+        dimension. Sin coleccion: ceros, no error."""
+        from qdrant_client.http.exceptions import UnexpectedResponse
+
+        if not self._collection_exists():
+            return {"collection": self._collection, "points": 0,
+                    "dimension": self._dimension}
+        try:
+            count = self._client.count(collection_name=self._collection).count
+            info = self._client.get_collection(collection_name=self._collection)
+            vectors = getattr(info.config.params, "vectors", None)
+            if isinstance(vectors, dict):
+                dim = vectors.get("size", self._dimension)
+            else:
+                dim = getattr(vectors, "size", self._dimension)
+        except (UnexpectedResponse, httpx.HTTPError) as exc:
+            raise _qdrant_error(exc) from exc
+        return {"collection": self._collection, "points": int(count),
+                "dimension": int(dim)}
+
+    def sample_points(self, limit: int = 5) -> list[Chunk]:
+        """Solo lectura, para el panel de datos: primeros puntos de
+        ejemplo. Sin coleccion: vacio, no error."""
+        from qdrant_client.http.exceptions import UnexpectedResponse
+
+        if not self._collection_exists():
+            return []
+        try:
+            points, _ = self._client.scroll(
+                collection_name=self._collection, limit=limit, offset=None,
+                with_payload=True)
+        except (UnexpectedResponse, httpx.HTTPError) as exc:
+            raise _qdrant_error(exc) from exc
+        return [_chunk_from_payload(pt.payload) for pt in points]

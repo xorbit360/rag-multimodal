@@ -36,6 +36,16 @@ class VectorStorePort(Protocol):
         """Necesario para la parte de palabras clave del retrieval hibrido."""
         ...
 
+    def stats(self) -> dict:
+        """Solo lectura, para el panel de datos: coleccion, puntos y
+        dimension. Nunca modifica nada."""
+        ...
+
+    def sample_points(self, limit: int = 5) -> list[Chunk]:
+        """Solo lectura, para el panel de datos: primeros chunks
+        guardados, de ejemplo. Nunca modifica nada."""
+        ...
+
 
 class LLMPort(Protocol):
     def generate(self, system_prompt: str, user_prompt: str) -> str:

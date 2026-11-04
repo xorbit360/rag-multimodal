@@ -21,9 +21,9 @@ from app.adapters.token_vault import (
     TokenVaultUnavailable, validate_browser_id,
 )
 from app.api.schemas import (
-    AskRequest, AskResponse, AudioAskResponse, DetectRequest, DetectResponse,
-    ImageAskResponse, JobOut, ModelInfoOut, SourceOut, TokenSaveRequest,
-    TokenStatus,
+    AskRequest, AskResponse, AudioAskResponse, DataOverviewOut, DetectRequest,
+    DetectResponse, ImageAskResponse, JobOut, ModelInfoOut, SamplePointOut,
+    SourceOut, TokenSaveRequest, TokenStatus,
 )
 from app.config import get_settings
 from app.dependencies import Container
@@ -90,7 +90,7 @@ async def lifespan(_app):
     yield
 
 
-app = FastAPI(title="RAG Multimodal", version="0.4.0", lifespan=lifespan)
+app = FastAPI(title="RAG Multimodal", version="0.5.0", lifespan=lifespan)
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".webm", ".flac", ".mp4"}
@@ -141,6 +141,38 @@ def list_documents():
                                      "images": job.images_count,
                                      "status": job.status.value}
     return list(docs.values())
+
+
+@app.get("/data/overview", response_model=DataOverviewOut)
+def data_overview():
+    """Panel de datos solo lectura, SOLO en modo demo: que hay guardado
+    en la base de vectores y como se ve, para el evaluador. Es un GET
+    que nunca modifica nada ni devuelve secretos: solo metadatos y
+    textos que ya son visibles en las respuestas del chat. Fuera del
+    modo demo no existe (404), para no exponer datos de un despliegue
+    real."""
+    if not settings.demo_mode:
+        raise HTTPException(
+            status_code=404, detail="No disponible fuera del modo demo")
+    try:
+        stats = container.store.stats()
+        samples = container.store.sample_points(limit=5)
+    except StoreUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    if settings.embedding_provider == "openai":
+        embedding_label = f"openai ({settings.embedding_model})"
+    else:
+        embedding_label = (
+            f"hash ({settings.embedding_dimension} dims, solo demo)")
+    return DataOverviewOut(
+        vector_store=settings.vector_store,
+        collection=stats.get("collection", ""),
+        points=stats.get("points", 0),
+        dimension=stats.get("dimension", 0),
+        embedding=embedding_label,
+        samples=[SamplePointOut(
+            document_name=c.document_name, page=c.page, kind=c.kind,
+            section=c.section or "", text=c.text[:300]) for c in samples])
 
 
 @app.post("/llm/detect", response_model=DetectResponse)

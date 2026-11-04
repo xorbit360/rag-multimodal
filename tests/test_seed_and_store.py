@@ -7,6 +7,7 @@ falso: nunca se contacta un servidor Qdrant real.
 """
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -153,15 +154,29 @@ class FakeQdrantClient:
             raise self.fail
         return self._exists
 
-    def search(self, collection_name, query_vector, limit):
+    def query_points(self, collection_name, query, limit):
+        # query_points es la API vigente (search se elimino en 1.20):
+        # devuelve un objeto con .points, no una lista directa.
         if self.fail is not None:
             raise self.fail
-        return self._points[:limit]
+        return SimpleNamespace(points=self._points[:limit])
 
     def scroll(self, collection_name, limit, offset, with_payload):
         if self.fail is not None:
             raise self.fail
-        return ([], None)
+        return (self._points[:limit], None)
+
+    def count(self, collection_name):
+        if self.fail is not None:
+            raise self.fail
+        return SimpleNamespace(count=len(self._points))
+
+    def get_collection(self, collection_name):
+        if self.fail is not None:
+            raise self.fail
+        return SimpleNamespace(
+            config=SimpleNamespace(
+                params=SimpleNamespace(vectors={"size": 384})))
 
 
 def _qdrant_store(fake_client):

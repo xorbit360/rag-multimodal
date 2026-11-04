@@ -283,6 +283,26 @@ ancho completo, los botones son grandes y tactiles (minimo 48 px) y el
 input usa fuente de 16 px para evitar el zoom automatico de iOS. No es
 un rediseno completo, solo ajustes para que se vea bien en el movil.
 
+### Boton "Ver base de datos" (panel solo lectura, para el evaluador)
+En la barra lateral del demo hay un boton "Ver base de datos" que
+consulta `GET /data/overview` y muestra: motor (Qdrant o memoria),
+coleccion, puntos guardados, dimension del vector, tipo de embedding
+y los primeros puntos de ejemplo con documento, pagina, tipo, seccion
+y texto. Es un GET que nunca modifica nada ni devuelve secretos: los
+textos mostrados ya son visibles en las respuestas del chat. El
+endpoint existe SOLO en modo demo (fuera de el devuelve 404), para no
+exponer datos de un despliegue real. El dashboard crudo de Qdrant NO
+se expone en publico a proposito: sin contrasena, cualquiera podria
+leer y borrar la coleccion.
+
+### Cliente Qdrant: query_points (no .search)
+La busqueda semantica usa `query_points`, la API vigente de
+qdrant-client: `.search()` fue eliminado en la version 1.20 y toda
+pregunta fallaba con AttributeError antes de llamar al LLM (ese fue
+el 500 visto en vivo). Por eso `requirements.txt` fija
+`qdrant-client>=1.14,<2`: 1.14 ya tiene query_points y el tope evita
+una futura version mayor que vuelva a romper la API.
+
 ### Embeddings
 En producción: OpenAI / Ollama vía el mismo adaptador compatible. En
 tests/demo: embedding por hash determinista (384 dim, offline, gratis).
