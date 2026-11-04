@@ -23,9 +23,10 @@ from app.dependencies import Container
 from app.domain.model_selection import (
     ModelCandidate, select_model, select_transcription_model,
 )
-from app.domain.ports import VisionNotSupportedError
+from app.domain.ports import ProviderResponseError, VisionNotSupportedError
 from app.domain.use_cases import AskUseCase, AudioAskUseCase, ImageAskUseCase
 from app.infrastructure.logging import setup_logging
+from app.infrastructure.resilience import CircuitOpenError
 
 setup_logging()
 settings = get_settings()
@@ -177,7 +178,27 @@ def ask(req: AskRequest):
     else:
         use_case = container.ask
         model_used, model_auto = "demo", False
-    answer = use_case.ask(req.question, top_k=req.top_k)
+    # Antes, cualquier fallo del proveedor (401, 404, timeout, conexion,
+    # respuesta con forma inesperada) escapaba sin mapear y FastAPI
+    # devolvia un 500 "Internal Server Error" en el chat. Ahora se
+    # traduce a 502 con un mensaje limpio, igual que en audio e imagen.
+    try:
+        answer = use_case.ask(req.question, top_k=req.top_k)
+    except httpx.HTTPError:
+        raise HTTPException(
+            status_code=502,
+            detail="El proveedor del LLM devolvio un error. Revisa que el "
+                   "token sea valido y que el modelo exista.")
+    except ProviderResponseError:
+        raise HTTPException(
+            status_code=502,
+            detail="El proveedor devolvio una respuesta inesperada. Revisa "
+                   "el modelo elegido y que el token sea valido.")
+    except CircuitOpenError:
+        raise HTTPException(
+            status_code=502,
+            detail="El proveedor esta temporalmente no disponible "
+                   "(cooldown). Intentalo de nuevo en unos segundos.")
     sources, image_url = _answer_out(answer)
     return AskResponse(
         answer=answer.text, sources=sources,
@@ -229,6 +250,16 @@ def ask_audio(audio: UploadFile = File(...),
             status_code=502,
             detail="El proveedor no pudo transcribir el audio. Revisa que el "
                    "proveedor ofrezca transcripcion y que el token sea valido.")
+    except ProviderResponseError:
+        raise HTTPException(
+            status_code=502,
+            detail="El proveedor devolvio una respuesta inesperada. Revisa "
+                   "el modelo elegido y que el token sea valido.")
+    except CircuitOpenError:
+        raise HTTPException(
+            status_code=502,
+            detail="El proveedor esta temporalmente no disponible "
+                   "(cooldown). Intentalo de nuevo en unos segundos.")
     answer = result.answer
     sources, image_url = _answer_out(answer)
     return AudioAskResponse(
@@ -282,6 +313,16 @@ def ask_image(image: UploadFile = File(...),
             status_code=502,
             detail="El proveedor de vision devolvio un error. Revisa el "
                    "modelo elegido y que el token sea valido.")
+    except ProviderResponseError:
+        raise HTTPException(
+            status_code=502,
+            detail="El proveedor devolvio una respuesta inesperada. Revisa "
+                   "el modelo elegido y que el token sea valido.")
+    except CircuitOpenError:
+        raise HTTPException(
+            status_code=502,
+            detail="El proveedor esta temporalmente no disponible "
+                   "(cooldown). Intentalo de nuevo en unos segundos.")
     answer = result.answer
     sources, image_url = _answer_out(answer)
     return ImageAskResponse(

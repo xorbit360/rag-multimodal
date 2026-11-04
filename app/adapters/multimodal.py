@@ -18,7 +18,7 @@ import logging
 
 import httpx
 
-from app.domain.ports import VisionNotSupportedError
+from app.domain.ports import ProviderResponseError, VisionNotSupportedError
 from app.infrastructure.resilience import CircuitBreaker, retry_with_backoff
 
 log = logging.getLogger(__name__)
@@ -65,7 +65,8 @@ class OpenAICompatibleTranscription:
             resp.raise_for_status()
             text = (resp.json().get("text") or "").strip()
             if not text:
-                raise ValueError("el proveedor devolvio una transcripcion vacia")
+                raise ProviderResponseError(
+                    "el proveedor devolvio una transcripcion vacia")
             return text
         return self._breaker.call(lambda: retry_with_backoff(_call))
 
@@ -108,8 +109,16 @@ class OpenAICompatibleVision:
                         "con vision (por ejemplo, uno de la familia GPT-4o) o "
                         "pregunta solo con texto.") from exc
                 raise
-            text = (resp.json()["choices"][0]["message"]["content"] or "").strip()
+            try:
+                data = resp.json()
+                choices = data.get("choices") or []
+                content = choices[0].get("message", {}).get("content") if choices else None
+            except (ValueError, AttributeError, IndexError, KeyError, TypeError) as exc:
+                raise ProviderResponseError(
+                    "el proveedor devolvio una respuesta inesperada") from exc
+            text = (content or "").strip()
             if not text:
-                raise ValueError("el proveedor devolvio una descripcion vacia")
+                raise ProviderResponseError(
+                    "el proveedor devolvio una descripcion vacia")
             return text
         return self._breaker.call(lambda: retry_with_backoff(_call))

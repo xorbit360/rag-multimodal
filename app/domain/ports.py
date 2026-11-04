@@ -46,6 +46,12 @@ class VisionNotSupportedError(Exception):
     """El proveedor o el modelo no acepta imagenes (vision)."""
 
 
+class ProviderResponseError(Exception):
+    """El proveedor devolvio una respuesta con forma inesperada (sin
+    opciones, contenido vacio o cuerpo no JSON). No es un fallo del
+    core: el endpoint lo traduce a un error limpio, nunca a un 500."""
+
+
 class TranscriptionPort(Protocol):
     def transcribe(self, audio: bytes, filename: str, model: str) -> str:
         """Transcribe un audio con el endpoint OpenAI-compatible

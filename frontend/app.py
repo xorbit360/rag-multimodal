@@ -61,6 +61,15 @@ button { min-height: 44px; }
 """, unsafe_allow_html=True)
 
 
+def _error_detail(resp):
+    """Mensaje limpio de un error de la API: el detail si viene JSON,
+    si no el texto crudo. Antes se mostraba el JSON completo."""
+    try:
+        return str(resp.json().get("detail", resp.text))
+    except Exception:
+        return resp.text
+
+
 def show_model_caption(data):
     used = data.get("model_used")
     if not used:
@@ -330,7 +339,7 @@ if chat_value:
                           "top_k": "5"},
                     timeout=300.0)
                 if resp.status_code != 200:
-                    st.error(f"Error: {resp.text[:300]}")
+                    st.error(f"Error: {_error_detail(resp)[:300]}")
                     st.stop()
                 data = resp.json()
                 st.caption(f"Transcripción: {data['transcription']}")
@@ -374,7 +383,7 @@ if chat_value:
                           "top_k": "5"},
                     timeout=180.0)
                 if resp.status_code != 200:
-                    st.error(f"Error: {resp.text[:300]}")
+                    st.error(f"Error: {_error_detail(resp)[:300]}")
                     st.stop()
                 data = resp.json()
                 st.caption(f"Descripción de la imagen: {data['description']}")
@@ -403,7 +412,7 @@ if chat_value:
                     payload["llm"] = override
                 resp = httpx.post(f"{API_URL}/ask", json=payload, timeout=120.0)
                 if resp.status_code != 200:
-                    st.error(f"Error del LLM: {resp.text[:300]}")
+                    st.error(f"Error del LLM: {_error_detail(resp)[:300]}")
                     st.stop()
                 data = resp.json()
                 show_answer(data)

@@ -16,6 +16,7 @@ import re
 import httpx
 
 from app.domain.models import INSUFFICIENT_ANSWER
+from app.domain.ports import ProviderResponseError
 from app.infrastructure.resilience import CircuitBreaker, retry_with_backoff
 
 log = logging.getLogger(__name__)
@@ -44,7 +45,21 @@ class OpenAICompatibleLLM:
                 timeout=120.0,
             )
             resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"].strip()
+            # La forma se valida: un 200 con cuerpo inesperado (sin
+            # choices, contenido nulo o no JSON) antes reventaba con
+            # KeyError/IndexError/AttributeError y el endpoint devolvia
+            # un 500. Ahora es un error de proveedor, mapeado a 502.
+            try:
+                data = resp.json()
+                choices = data.get("choices") or []
+                content = choices[0].get("message", {}).get("content") if choices else None
+            except (ValueError, AttributeError, IndexError, KeyError, TypeError) as exc:
+                raise ProviderResponseError(
+                    "el proveedor devolvio una respuesta inesperada") from exc
+            if not content or not str(content).strip():
+                raise ProviderResponseError(
+                    "el proveedor devolvio una respuesta vacia")
+            return str(content).strip()
         return self._breaker.call(lambda: retry_with_backoff(_call))
 
 
