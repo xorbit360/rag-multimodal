@@ -92,9 +92,9 @@ def show_model_caption(data):
     if data.get("token_source") == "visitor":
         suffix = " (tu token guardado)"
     elif data.get("token_source") == "default":
-        suffix = " (token predeterminado del demo)"
+        suffix = " (token compartido del sistema)"
     if used == "demo":
-        st.caption("Modelo usado: demo (sin costo)")
+        st.caption("Modelo usado: sin token (respuesta extractiva, sin costo)")
     elif data.get("model_auto"):
         st.caption(f"Modelo usado: {used} (automático){suffix}")
     else:
@@ -173,8 +173,8 @@ with st.sidebar:
                  f"{doc['images']} imagenes)")
 
     st.header("LLM (opcional)")
-    st.caption("Sin token propio, usa el token predeterminado del demo si "
-               "lo hay; si no, responde en modo demo sin costo. Pega tu "
+    st.caption("Sin token propio, usa el token compartido del sistema si "
+               "lo hay; si no, responde sin token, sin costo. Pega tu "
                "token y se detecta el proveedor solo. O escribe una Base "
                "URL personalizada (p. ej. Ollama local) y se detectan sus "
                "modelos automaticamente, sin token. Si guardas un token, "
@@ -231,9 +231,9 @@ with st.sidebar:
     # JavaScript genera el ID en localStorage y lo escribe en este campo;
     # Python nunca genera uno propio para no dejar guardados huerfanos.
     browser_id = st.text_input(
-        "ID del navegador", key="browser_id",
-        help="Solo un identificador aleatorio para tu token guardado en el "
-             "servidor. No es el token.")
+        "ID de sesión (automático)", key="browser_id",
+        help="Se genera automáticamente para tu token guardado en el "
+             "servidor. No es el token, no tienes que escribirlo.")
     if browser_id and not token:
         if (st.session_state.get("status_for") != browser_id
                 or st.session_state.get("refresh_token_status")):
@@ -250,9 +250,9 @@ with st.sidebar:
         elif status.get("active") == "visitor":
             st.caption("Usando: tu token guardado (encriptado en el servidor).")
         elif status.get("active") == "default":
-            st.caption("Usando: token predeterminado del demo.")
+            st.caption("Usando: token compartido del sistema.")
         else:
-            st.caption("Modo demo (sin token).")
+            st.caption("Sin token.")
         # Proveedor y modelos del token guardado, sin volver a pegar el
         # token (la clave nunca vuelve del servidor).
         if (status.get("active") in ("visitor", "default")
@@ -318,7 +318,7 @@ with st.sidebar:
                     st.session_state["server_detected_for"] = None
                     st.session_state["clear_token_field"] = True
                     st.success("Tu token guardado fue borrado. Vuelve al "
-                               "predeterminado del demo o al modo demo.")
+                               "token compartido del sistema o al modo sin token.")
             except Exception as exc:
                 st.error(f"No se pudo borrar: {exc}")
 
@@ -437,7 +437,7 @@ with st.sidebar:
   }
   var tries = 0;
   var timer = setInterval(function() {
-    var idInput = findInput("ID del navegador");
+    var idInput = findInput("ID de sesión (automático)");
     var tokenInput = findInput("Token del LLM");
     if (!tokenInput) { tokenInput = window.parent.document.querySelector('input[type="password"]'); }
     tries++;
@@ -462,7 +462,7 @@ with st.sidebar:
     st.session_state.pop("clear_token_field", None)
 
     st.header("Visualizar RAG")
-    st.caption("Abre el dashboard real de Qdrant, la base de vectores del demo: colecciones, puntos y vectores. Pide usuario y contraseña; solo quien tenga la clave puede entrar.")
+    st.caption("Abre el panel de Qdrant, la base de vectores del sistema: colecciones y puntos. Requiere usuario y contraseña.")
     st.link_button("Visualizar RAG", QDRANT_URL)
 
 if "history" not in st.session_state:
@@ -509,7 +509,7 @@ if chat_value:
     if audio_upload is not None:
         if not override:
             st.warning("El audio necesita un token: pégalo en la sección LLM. "
-                       "En modo demo sin token no se puede transcribir.")
+                       "Sin token no se puede transcribir.")
             st.stop()
         with st.chat_message("user"):
             st.markdown(text if text else "🎤 Audio enviado")
@@ -555,7 +555,7 @@ if chat_value:
     elif image_upload is not None:
         if not override:
             st.warning("La pregunta con imagen necesita un token: pégalo en "
-                       "la sección LLM. En modo demo sin token no se puede "
+                       "la sección LLM. Sin token no se puede "
                        "describir imágenes.")
             st.stop()
         with st.chat_message("user"):

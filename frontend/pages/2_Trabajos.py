@@ -34,7 +34,7 @@ try:
     health = httpx.get(f"{API_URL}/health", timeout=10.0).json()
     st.caption(
         f"Cola: {health.get('queue')} · Vector store: "
-        f"{health.get('vector_store')} · Modo demo: {health.get('demo_mode')}"
+        f"{health.get('vector_store')}"
     )
 except Exception as exc:
     st.error(f"No se pudo consultar la API: {exc}")
@@ -75,11 +75,11 @@ try:
     st.write(f"- Vector store: {overview['vector_store']}")
     for sample in overview.get("samples", []):
         st.write(
-            f"- Ejemplo: {sample['document_name']}, pagina "
+            f"- Punto guardado: {sample['document_name']}, pagina "
             f"{sample['page']} ({sample['kind']}): {sample['text'][:200]}"
         )
 except Exception:
     st.caption(
-        "La ficha del vector store solo esta disponible en modo demo "
-        "(/data/overview). Fuera del modo demo, esta seccion no existe."
+        "La ficha del vector store solo esta disponible en esta "
+        "configuracion (/data/overview)."
     )
