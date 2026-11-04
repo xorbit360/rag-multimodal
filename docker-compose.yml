@@ -1,0 +1,55 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-hash}
+      - VECTOR_STORE=${VECTOR_STORE:-qdrant}
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_COLLECTION=rag_chunks
+      - QUEUE_BACKEND=memory
+      - STORAGE_DIR=/app/storage
+      - DEMO_MODE=${DEMO_MODE:-true}
+    volumes:
+      - rag_storage:/app/storage
+    depends_on:
+      - qdrant
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "8501:8501"
+    environment:
+      - API_URL=http://api:8000
+    depends_on:
+      - api
+    command: streamlit run frontend/app.py --server.port 8501 --server.address 0.0.0.0
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    # Reservado para la cola Redis (QUEUE_BACKEND=redis + worker).
+    # En la configuracion por defecto la API usa la cola en memoria con
+    # hilos; Redis queda disponible sin romper el arranque en un comando.
+
+volumes:
+  rag_storage:
+  qdrant_storage:

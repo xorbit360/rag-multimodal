@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rag-multimodal"
+version = "0.1.0"
+description = "Sistema RAG multimodal para PDFs tecnicos: texto, tablas e imagenes con bounding boxes"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.2",
+    "pymupdf>=1.24",
+    "pdfplumber>=0.11",
+    "httpx>=0.27",
+    "python-multipart>=0.0.9",
+    "redis>=5.0",
+    "qdrant-client>=1.11",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
