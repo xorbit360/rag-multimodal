@@ -170,6 +170,17 @@ pdfplumber queda solo como respaldo si PyMuPDF falla en un PDF. Sin
 bounding boxes reales no habría chunking por layout ni "imagen más
 cercana" fiable: esa es la base de lo multimodal.
 
+### Por qué no Postgres
+No hay datos relacionales ni transacciones en este sistema: jobs son
+llave-valor con cola (Redis), vectores son busqueda por similitud
+(Qdrant) y PDFs/imagenes son archivos (storage). Agregar Postgres
+sin un caso de uso seria sobreingenieria: dos fuentes de verdad
+para los jobs, mas fallos y mas complejidad, sin ninguna consulta
+con joins que lo justifique. Postgres seria el paso correcto si el
+producto creciera a usuarios, permisos, facturacion o auditoria
+relacional, y en ese caso se agregaria por esa razon, no por
+apariencia.
+
 ### Recuperación híbrida
 Semántica (coseno sobre embeddings) + BM25 implementado en el proyecto
 (sin servicio externo). El puntaje final usa el coseno **crudo**, no
@@ -416,6 +427,7 @@ coincidencia de tokens, y nunca se presenta como semántico.
 
 ```bash
 pytest -q
+# 127 passed
 ```
 
 Sin llave de API real y sin internet. Cubren: chunking por layout,
