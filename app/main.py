@@ -222,16 +222,18 @@ def detect_llm(req: DetectRequest):
         # Solo custom usa base_url propia; openai/openrouter se
         # detectan por su orden habitual (pasar su URL forzaria custom).
         base_url = config.get("base_url") if config.get("provider") == "custom" else None
-    if not api_key:
+    if not api_key and not base_url:
         raise HTTPException(
             status_code=400,
-            detail="Pega un token o usa un token guardado.")
+            detail="Pega un token o usa un token guardado (o escribe una "
+                   "base_url personalizada).")
     provider, info = detect_provider_info(api_key, base_url)
     if provider is None:
         return DetectResponse(
             detected=False,
-            message="No se reconoció el token en OpenAI ni en OpenRouter. "
-                    "Puedes configurarlo manual con proveedor y base_url.")
+            message="No se reconoció el token en OpenAI ni en OpenRouter, "
+                    "ni respondió la base_url personalizada. Puedes "
+                    "configurarlo manual con proveedor y base_url.")
     base = base_url if provider == "custom" else PROVIDERS[provider]
     models_info = [ModelInfoOut(**m) for m in info]
     return DetectResponse(detected=True, provider=provider, base_url=base,
@@ -335,6 +337,13 @@ def _resolve_key_and_selection(provider: str, base_url: str | None,
     models_info_json, origen) con origen en request, visitor, default o
     demo. Nunca devuelve el valor de la clave en errores: los mensajes
     solo hablan de configuracion."""
+    if provider == "custom" and base_url:
+        # Peticion explicita a un endpoint propio (p. ej. Ollama local):
+        # la clave es la que trae la peticion, aunque sea vacia. Ollama
+        # no exige clave. Sin este atajo, una clave vacia caeria a la
+        # boveda y se enviaria la predeterminada a un endpoint ajeno.
+        return (api_key, provider, base_url, model, auto_model,
+                models_info_json, "request")
     if api_key:
         return (api_key, provider, base_url, model, auto_model,
                 models_info_json, "request")
@@ -433,7 +442,10 @@ def ask(req: AskRequest):
             if llm_in and llm_in.models_info else None,
             llm_in.api_key if llm_in else "",
             req.browser_id))
-    if api_key:
+    # Un endpoint propio explicito (custom + base_url) usa su LLM aunque
+    # no traiga clave: Ollama local no exige ninguna. Sin esta rama, una
+    # clave vacia caeria al LLM demo y el endpoint propio se ignoraria.
+    if api_key or (provider == "custom" and base_url):
         llm, model_used, model_auto = _resolve_llm(
             provider, model, api_key, base_url, auto_model,
             models_info_json, need_vision=False)
@@ -572,7 +584,7 @@ def ask_image(image: UploadFile = File(...),
         _resolve_key_and_selection(
             provider, base_url, model, auto_model, models_info_json,
             api_key or "", browser_id))
-    if not api_key:
+    if not api_key and not (provider == "custom" and base_url):
         raise HTTPException(
             status_code=400,
             detail="La pregunta con imagen necesita un token: pegalo en la "

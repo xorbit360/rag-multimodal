@@ -175,20 +175,29 @@ with st.sidebar:
     st.header("LLM (opcional)")
     st.caption("Sin token propio, usa el token predeterminado del demo si "
                "lo hay; si no, responde en modo demo sin costo. Pega tu "
-               "token y se detecta el proveedor solo. Si lo guardas, queda "
-               "encriptado en el servidor asociado a tu navegador (no se "
-               "guarda en este navegador) y puedes borrarlo.")
+               "token y se detecta el proveedor solo. O escribe una Base "
+               "URL personalizada (p. ej. Ollama local) y se detectan sus "
+               "modelos automaticamente, sin token. Si guardas un token, "
+               "queda encriptado en el servidor asociado a tu navegador "
+               "(no se guarda en este navegador) y puedes borrarlo.")
     token = st.text_input("Token del LLM", type="password", key="llm_token")
-    if st.button("Detectar proveedor") and token:
+    custom_url = st.text_input(
+        "Base URL personalizada (opcional)",
+        help="Endpoint compatible con OpenAI, p. ej. Ollama local: "
+             "http://localhost:11434/v1. Ollama no exige token: con la URL "
+             "sola se detectan sus modelos automaticamente. Si hay URL, "
+             "manda sobre el token y el token guardado.")
+    if st.button("Detectar proveedor") and (token or custom_url):
         with st.spinner("Detectando proveedor..."):
-            det = _detect(token)
+            det = _detect(token, custom_url or None)
         if det["detected"]:
             st.session_state["llm_detected"] = det
             st.session_state["auto_detected_for"] = token
+            st.session_state["auto_detected_for_url"] = custom_url
             st.success(f"Proveedor detectado: {det['provider']}")
         else:
             st.session_state["llm_detected"] = None
-            st.warning("No se reconoció el token. Configúralo manual abajo.")
+            st.warning("No se reconoció el token ni la URL. Configúralo manual abajo.")
     if token and st.session_state.get("auto_detected_for") != token:
         # Al pegar un token o al cambiarlo: detectar automaticamente,
         # sin pulsar nada. (El token guardado en el servidor no pasa
@@ -200,10 +209,23 @@ with st.sidebar:
         except Exception:
             pass
         st.session_state["auto_detected_for"] = token
-    if not token:
+    if custom_url and st.session_state.get("auto_detected_for_url") != custom_url:
+        # Al escribir o cambiar la URL personalizada: detectar sus
+        # modelos automaticamente, aunque no haya token (Ollama no
+        # exige clave). Si la URL no responde, el bloque manual abajo
+        # permite escribir el modelo a mano.
+        try:
+            det = _detect(token, custom_url)
+            if det["detected"]:
+                st.session_state["llm_detected"] = det
+        except Exception:
+            pass
+        st.session_state["auto_detected_for_url"] = custom_url
+    if not token and not custom_url:
         st.session_state.pop("llm_detected", None)
         st.session_state.pop("llm_override", None)
         st.session_state["auto_detected_for"] = None
+        st.session_state["auto_detected_for_url"] = None
 
     # Identificador del navegador + estado del token guardado. El puente
     # JavaScript genera el ID en localStorage y lo escribe en este campo;
@@ -355,6 +377,39 @@ with st.sidebar:
         st.session_state["llm_override"] = llm_override
     else:
         st.session_state.pop("llm_override", None)
+
+    if custom_url:
+        # URL personalizada presente: manda sobre token y token guardado.
+        # Un endpoint propio (Ollama local) funciona sin token.
+        det = st.session_state.get("llm_detected")
+        if det and det.get("provider") == "custom":
+            models = det["models"] or []
+            choice = st.selectbox("Modelo (personalizado)",
+                                  [AUTO_LABEL] + models, index=0)
+            if choice == AUTO_LABEL:
+                st.session_state["llm_override"] = {
+                    "provider": "custom", "base_url": custom_url,
+                    "model": None, "api_key": token,
+                    "auto_model": True,
+                    "models_info": det.get("models_info")}
+            else:
+                st.session_state["llm_override"] = {
+                    "provider": "custom", "base_url": custom_url,
+                    "model": choice, "api_key": token,
+                    "auto_model": False, "models_info": None}
+        else:
+            manual_model = st.text_input(
+                "Modelo personalizado (si la URL no listó modelos)")
+            if manual_model:
+                st.session_state["llm_override"] = {
+                    "provider": "custom", "base_url": custom_url,
+                    "model": manual_model, "api_key": token,
+                    "auto_model": False, "models_info": None}
+            else:
+                st.session_state["llm_override"] = {
+                    "provider": "custom", "base_url": custom_url,
+                    "model": None, "api_key": token,
+                    "auto_model": True, "models_info": None}
 
     # Puente a localStorage: se ejecuta en el navegador del usuario.
     # Solo gestiona el ID del navegador (no el token, que nunca se

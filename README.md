@@ -195,6 +195,23 @@ ni predeterminado, sigue el modo demo sin costo. La clave viaja solo
 del navegador al frontend por TLS y de ahi a la API por la red interna
 de Docker (la API no se publica); nunca queda en logs ni en Git.
 
+### Endpoint propio sin token (Ollama local)
+Ollama no exige clave: en la barra lateral escribe solo la "Base URL
+personalizada" (p. ej. `http://localhost:11434/v1`) y la API detecta
+automaticamente sus modelos desde /models, sin token. Si la URL esta
+presente, manda sobre el token y el token guardado, y el chat usa ese
+endpoint aunque no haya clave (una clave vacia ya no cae a la boveda
+ni al modo demo). Si la URL no lista modelos, escribe el modelo a mano.
+Limite honesto de alcance: las llamadas al LLM las hace el servidor,
+no tu navegador, asi que un Ollama "local" solo es alcanzable cuando
+el stack corre en la misma maquina que Ollama (en docker-compose, la
+api ve al host como `http://host.docker.internal:11434/v1`); desde el
+demo publico no se puede alcanzar el localhost del visitante. El audio
+sigue exigiendo un proveedor con transcripcion (whisper): un modelo de
+chat de Ollama no transcribe. La pregunta con imagen si funciona con
+un modelo de vision de Ollama (p. ej. llava) desde un endpoint propio,
+con o sin token.
+
 ### Token guardado en el servidor, encriptado (opcional)
 Si pulsas "Guardar token en el servidor", el backend cifra tu token
 (Fernet simetrico) y lo asocia a un identificador aleatorio de tu
