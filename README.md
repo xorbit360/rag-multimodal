@@ -1,5 +1,7 @@
 # Sistema RAG Multimodal
 
+> **Demo en vivo:** https://rag.xorbit360.com — Trabajos, solo lectura: https://rag.xorbit360.com/Trabajos
+
 Sistema RAG para PDFs técnicos con texto, tablas, diagramas e imágenes.
 Responde en lenguaje natural usando solo el contexto recuperado, muestra
 la fuente con página y, cuando la respuesta usa un diagrama, muestra la
@@ -329,18 +331,17 @@ ancho completo, los botones son grandes y tactiles (minimo 48 px) y el
 input usa fuente de 16 px para evitar el zoom automatico de iOS. No es
 un rediseno completo, solo ajustes para que se vea bien en el movil.
 
-### Boton "Visualizar RAG" (abre el Qdrant real, con contrasena)
-En la barra lateral del demo hay un boton "Visualizar RAG" que abre
-el dashboard real de Qdrant (la URL la fija `QDRANT_DASHBOARD_URL`:
-en el VPS es el subdominio de Qdrant, en local el Qdrant del propio
-docker-compose). El dashboard va detras de usuario y contrasena
-(basic auth de Traefik, solo en el servidor): sin la clave, nadie
-entra a ver ni a borrar la coleccion. Las credenciales NO van al
-repositorio (es publico): viven solo en el servidor y se comparten
-con el evaluador por el correo privado de entrega. Ademas, el
-endpoint `GET /data/overview` sigue disponible como API de solo
-lectura (motor, coleccion, puntos, dimension, embedding y puntos de
-ejemplo) y existe SOLO en modo demo (fuera de el devuelve 404).
+### Ver el vector store sin exponer Qdrant
+El demo publico NO enlaza al dashboard de Qdrant: ese panel permite
+escribir y borrar, asi que exponerlo desde la web publica romperia
+el demo para el siguiente evaluador. La vista de solo lectura es la
+pagina aparte `Trabajos` (en el demo en vivo, /Trabajos) y el
+endpoint `GET /data/overview` como API de solo lectura (motor,
+coleccion, puntos, dimension, embedding y puntos de ejemplo), que
+existe SOLO en modo demo (fuera de el devuelve 404). Quien corra el
+proyecto en local si puede abrir su propio Qdrant en
+http://localhost:6333/dashboard, porque ahi el riesgo lo asume el
+mismo usuario.
 
 ### Lista de documentos tras un reinicio
 `GET /documents` une el registro de jobs con el contenido real del
@@ -392,9 +393,13 @@ coincidencia de tokens, y nunca se presenta como semántico.
    TimeoutError al vencer el timeout, mientras que LPOP funciona;
    un job se procesa en menos de 2 s tras encolarse. Redis corre con
    appendonly y volumen `redis_data`, así que jobs y cola sobreviven
-   a un reinicio. Para escalar más allá de un host, el siguiente paso
-   sería mover el JobStore a Postgres y `storage/` a un object store;
-   eso ya no es necesario para demostrar 100 manuales en un host.
+   a un reinicio. El JobStore ya es Redis compartido, no en memoria
+   por proceso: varios workers pueden consumir la misma cola sin
+   duplicar jobs, y la API puede replicarse. Para escalar más allá
+   de un host, el siguiente paso sería mover Redis y Qdrant a
+   servicios gestionados y `storage/` a un object store; Postgres
+   no es un requisito para demostrar 100 manuales en un host, solo
+   una opcion si se quisiera auditoria relacional aparte.
 5. **Ingesta en lote:** subir 100 manuales son 100 jobs independientes;
    el progreso se consulta por `job_id` y un fallo no tumba los demás.
 

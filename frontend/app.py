@@ -34,10 +34,6 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 API_URL = os.environ.get("API_URL", "http://localhost:8000")
-# URL publica del dashboard de Qdrant. En el VPS la fija el override
-# de compose; en local es el Qdrant del propio docker-compose.
-QDRANT_URL = os.environ.get("QDRANT_DASHBOARD_URL",
-                            "http://localhost:6333/dashboard")
 # Solo el identificador aleatorio del navegador vive en localStorage.
 # El token nunca se guarda en el navegador: queda cifrado en el servidor.
 BROWSER_ID_LS_KEY = "rag_browser_id"
@@ -460,10 +456,6 @@ with st.sidebar:
 """.replace("__CLEAR__", clear_flag)
     components.html(bridge, height=0)
     st.session_state.pop("clear_token_field", None)
-
-    st.header("Visualizar RAG")
-    st.caption("Abre el panel de Qdrant, la base de vectores del sistema: colecciones y puntos. Requiere usuario y contraseña.")
-    st.link_button("Visualizar RAG", QDRANT_URL)
 
 if "history" not in st.session_state:
     st.session_state["history"] = []
