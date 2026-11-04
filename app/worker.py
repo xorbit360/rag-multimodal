@@ -37,19 +37,23 @@ def main() -> None:
     log.info("worker escuchando cola rag_ingest_jobs")
     while True:
         try:
-            # BLPOP con timeout 5 s, no indefinido: con timeout 0 el
-            # cliente redis-py cerraba el socket por timeout de lectura
-            # en el despliegue (verificado en vivo: reintentos cada
-            # 5-7 s sin procesar). Con 5 s el loop vuelve a bloquear
-            # y un job nuevo se procesa en menos de 5 s.
-            result = client.blpop("rag_ingest_jobs", timeout=5)
+            # Polling con LPOP cada 2 s, no BLPOP: en el despliegue
+            # en vivo, BLPOP con redis-py 8.1.0 / RESP3 cerraba el
+            # socket con TimeoutError al vencer el timeout, tanto
+            # con timeout 0 como con timeout 5, mientras que un
+            # LPOP simple funciona. Para el volumen de esta prueba
+            # (ingestas manuales, no miles por segundo), un job se
+            # procesa en menos de 2 s tras encolarse, sin el fallo
+            # del bloqueo. Documentado como decision, no como bug
+            # oculto.
+            job_id = client.lpop("rag_ingest_jobs")
         except Exception:
             log.exception("worker: error leyendo de Redis, reintentando")
             time.sleep(2)
             continue
-        if result is None:
+        if job_id is None:
+            time.sleep(2)
             continue
-        _, job_id = result
         job = container.jobs.get(job_id)
         if job is None:
             log.warning("job desconocido en cola job_id=%s", job_id)
