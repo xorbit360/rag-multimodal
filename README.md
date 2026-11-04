@@ -149,22 +149,54 @@ comprueba con /auth/key porque /models es publico) y te muestra el
 proveedor y sus modelos para elegir. Un token solo no dice que modelo
 es: el modelo se lista desde el proveedor y lo eliges tu. Tambien hay
 configuracion manual (proveedor + base_url + modelo) para cualquier
-endpoint compatible con OpenAI, incluido Ollama local. Sin token, sigue
-el modo demo sin costo. La clave solo vive en la memoria de tu sesion:
-nunca se guarda en disco, en Git ni en logs, y viaja solo del navegador
-al frontend por TLS y de ahi a la API por la red interna de Docker
-(la API no se publica).
+endpoint compatible con OpenAI, incluido Ollama local. Sin token propio
+ni predeterminado, sigue el modo demo sin costo. La clave viaja solo
+del navegador al frontend por TLS y de ahi a la API por la red interna
+de Docker (la API no se publica); nunca queda en logs ni en Git.
 
-### Token guardable en el navegador (opcional)
-Si pulsas "Guardar token en este navegador", el token se persiste SOLO
-en el localStorage de tu navegador: nunca se guarda en el servidor, ni
-en disco del backend, ni en Git, ni en logs. Al volver a cargar la
-pagina, el campo se restaura y el proveedor se detecta automaticamente.
-"Borrar token guardado" lo elimina de localStorage y de la sesion. Si el
-navegador bloquea el almacenamiento, el flujo manual (pegar token +
-Detectar) sigue funcionando. Nota honesta: localStorage lo puede leer
-cualquier script del mismo origen; es el almacenamiento propio del
-navegador del usuario, no un secreto compartido con el servidor.
+### Token guardado en el servidor, encriptado (opcional)
+Si pulsas "Guardar token en el servidor", el backend cifra tu token
+(Fernet simetrico) y lo asocia a un identificador aleatorio de tu
+navegador (el demo no tiene login). El navegador guarda solo ese
+identificador, nunca el token. Al volver, el frontend recupera el
+estado (proveedor, modelos) y las preguntas resuelven la clave en el
+servidor, sin volver a pegarla. "Borrar mi token guardado" elimina tu
+token y vuelve al predeterminado (si lo hay) o al modo demo. Si el
+servidor no tiene configurada la clave de cifrado
+(TOKEN_ENCRYPTION_KEY), guardar falla con un mensaje claro: nunca se
+guarda nada en plano. Nota honesta: el cifrado protege los datos
+guardados, no un servidor comprometido, porque el servidor debe
+desencriptar para llamar al proveedor.
+
+### Token predeterminado compartido (lo pone el dueno en el servidor)
+El servidor puede tener UN token predeterminado que usa cualquier
+visitante sin token propio guardado; si el visitante guarda el suyo,
+usa el suyo. La UI indica cual esta activo ("tu token guardado",
+"token predeterminado del demo" o "modo demo") sin revelar jamas el
+valor. La predeterminada NO se puede poner ni borrar desde la web
+publica: solo el dueno, en el servidor, con el script:
+
+    TOKEN_ENCRYPTION_KEY=<clave> python3 scripts/set_default_token.py \
+        [--provider openai] [--model MODELO]
+
+El script pide el token con getpass (no se muestra, no queda en el
+historial ni en argumentos) y lo deja cifrado en
+storage/default_token.enc (dentro del volumen persistente, asi que
+sobrevive a reconstrucciones). El modelo por defecto es gpt-4o-mini;
+con --model vacio queda automatico (que exige lista de modelos en la
+peticion, como siempre). Dentro del contenedor de la API:
+
+    docker compose exec -e TOKEN_ENCRYPTION_KEY=<clave> api \
+        python scripts/set_default_token.py
+
+Generar la clave de cifrado (una vez, en el entorno del servidor,
+nunca en Git):
+
+    python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+
+Ojo: el predeterminado compartido cobra a la clave del dueno cada
+pregunta, audio e imagen de cualquier visitante. Si se abusa de el,
+hay que rotarlo (volver a correr el script con la clave nueva).
 
 ### Modelo automatico: el mas economico (predeterminado)
 Tras detectar el proveedor, la opcion predeterminada es "Automatico (el

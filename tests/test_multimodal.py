@@ -302,10 +302,14 @@ def test_frontend_cableado():
         if line.strip().startswith("CHAT_FILE_TYPES"):
             assert "pdf" not in line
     assert 'type=["pdf"]' in src  # uploader de la barra lateral
-    # Token guardable/borrable solo en el navegador.
-    assert "Guardar token en este navegador" in src
-    assert "Borrar token guardado" in src
-    assert "localStorage" in src
+    # Token guardable/borrable en el servidor, encriptado (ya no en el
+    # navegador): el navegador solo guarda el ID aleatorio.
+    assert "Guardar token en el servidor" in src
+    assert "Borrar mi token guardado" in src
+    assert "/llm/token" in src
+    assert "rag_browser_id" in src
+    assert "Guardar token en este navegador" not in src
+    assert "rag_llm_token" not in src
     # Modelo automatico predeterminado y modelo usado visible.
     assert "Automático (el más económico)" in src
     assert "Modelo usado" in src

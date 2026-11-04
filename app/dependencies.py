@@ -7,6 +7,7 @@ from app.adapters.embeddings import HashEmbedding, OpenAICompatibleEmbedding
 from app.adapters.llm import FakeLLM, OpenAICompatibleLLM
 from app.adapters.pdf_parser import PyMuPDFParser
 from app.adapters.queue import InMemoryJobQueue, InMemoryJobStore, RedisJobQueue
+from app.adapters.token_vault import TokenVault
 from app.adapters.vector_store import InMemoryVectorStore, QdrantVectorStore
 from app.config import Settings
 from app.domain.use_cases import AskUseCase, IngestUseCase
@@ -46,6 +47,17 @@ class Container:
         self.jobs = InMemoryJobStore()
         self.queue = (RedisJobQueue(settings.redis_url) if settings.queue_backend == "redis"
                       else InMemoryJobQueue())
+        # Boveda de tokens: la construccion nunca falla por falta de
+        # clave; el fallo claro ocurre al guardar o usar. Los archivos
+        # viven bajo storage_dir (volumen persistente en compose).
+        token_store = (settings.token_store_dir
+                       or os.path.join(storage, "tokens"))
+        default_path = (settings.default_token_path
+                        or os.path.join(storage, "default_token.enc"))
+        self.token_vault = TokenVault(
+            store_dir=token_store,
+            encryption_key=settings.token_encryption_key,
+            default_path=default_path)
         self.ingest = IngestUseCase(self.parser, self.embedding, self.store,
                                     self.queue, self.jobs)
         self.ask = AskUseCase(self.llm, self.embedding, self.store)

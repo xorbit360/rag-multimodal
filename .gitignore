@@ -7,3 +7,7 @@ storage/uploads/*
 storage/images/*
 !storage/uploads/.gitkeep
 !storage/images/.gitkeep
+# Tokens guardados cifrados: nunca en Git (ni el almacen de visitantes
+# ni la predeterminada compartida).
+storage/tokens/
+storage/default_token.enc

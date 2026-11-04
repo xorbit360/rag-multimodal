@@ -17,6 +17,10 @@ services:
       - QUEUE_BACKEND=memory
       - STORAGE_DIR=/app/storage
       - DEMO_MODE=${DEMO_MODE:-true}
+      # Clave Fernet para el guardado de tokens en el servidor. Vacia =
+      # guardado no disponible (falla con mensaje claro, nunca en plano).
+      # La establece el dueno en el entorno del servidor, nunca en Git.
+      - TOKEN_ENCRYPTION_KEY=${TOKEN_ENCRYPTION_KEY:-}
     volumes:
       - rag_storage:/app/storage
     depends_on:

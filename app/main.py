@@ -14,9 +14,13 @@ from app.adapters.llm import PROVIDERS, build_override_llm, detect_provider_info
 from app.adapters.multimodal import (
     OpenAICompatibleTranscription, OpenAICompatibleVision,
 )
+from app.adapters.token_vault import (
+    TokenVaultUnavailable, validate_browser_id,
+)
 from app.api.schemas import (
     AskRequest, AskResponse, AudioAskResponse, DetectRequest, DetectResponse,
-    ImageAskResponse, JobOut, ModelInfoOut, SourceOut,
+    ImageAskResponse, JobOut, ModelInfoOut, SourceOut, TokenSaveRequest,
+    TokenStatus,
 )
 from app.config import get_settings
 from app.dependencies import Container
@@ -32,7 +36,7 @@ setup_logging()
 settings = get_settings()
 container = Container(settings)
 
-app = FastAPI(title="RAG Multimodal", version="0.3.0")
+app = FastAPI(title="RAG Multimodal", version="0.4.0")
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".webm", ".flac", ".mp4"}
@@ -88,20 +92,164 @@ def list_documents():
 @app.post("/llm/detect", response_model=DetectResponse)
 def detect_llm(req: DetectRequest):
     # Nunca se registra ni se devuelve la clave: solo proveedor, modelos,
-    # precios y modalidad (cuando el proveedor los da).
-    provider, info = detect_provider_info(req.api_key, req.base_url)
+    # precios y modalidad (cuando el proveedor los da). Con browser_id y
+    # sin api_key, se detecta con el token guardado (visitante o
+    # predeterminado) sin revelar su valor.
+    api_key = req.api_key
+    base_url = req.base_url
+    if not api_key and req.browser_id:
+        try:
+            config, _source = container.token_vault.resolve(req.browser_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except TokenVaultUnavailable as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"No se pudo usar el token guardado: {exc}")
+        if config is None:
+            return DetectResponse(
+                detected=False,
+                message="No hay token guardado para este navegador ni "
+                        "predeterminado. Pega un token.")
+        api_key = config["api_key"]
+        # Solo custom usa base_url propia; openai/openrouter se
+        # detectan por su orden habitual (pasar su URL forzaria custom).
+        base_url = config.get("base_url") if config.get("provider") == "custom" else None
+    if not api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Pega un token o usa un token guardado.")
+    provider, info = detect_provider_info(api_key, base_url)
     if provider is None:
         return DetectResponse(
             detected=False,
             message="No se reconoció el token en OpenAI ni en OpenRouter. "
                     "Puedes configurarlo manual con proveedor y base_url.")
-    base = req.base_url if provider == "custom" else PROVIDERS[provider]
+    base = base_url if provider == "custom" else PROVIDERS[provider]
     models_info = [ModelInfoOut(**m) for m in info]
     return DetectResponse(detected=True, provider=provider, base_url=base,
                           models=[m.id for m in models_info],
                           models_info=models_info,
                           message=f"Proveedor detectado: {provider} "
                                   f"({len(models_info)} modelos)")
+
+
+def _token_status(browser_id: str | None) -> TokenStatus:
+    """Estado del token para un navegador, sin el valor. Nunca lanza
+    por problemas de la boveda: los refleja en vault_error para que la
+    UI explique que el guardado no esta usable."""
+    vault = container.token_vault
+    status = TokenStatus(vault_configured=vault.configured,
+                         has_default=vault.has_default())
+    if browser_id:
+        try:
+            validate_browser_id(browser_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+    try:
+        visitor = vault.load_visitor(browser_id) if browser_id else None
+        default = vault.load_default()
+    except TokenVaultUnavailable as exc:
+        status.vault_error = str(exc)
+        return status
+    active = visitor if visitor is not None else default
+    status.has_visitor_token = visitor is not None
+    if visitor is not None:
+        status.active = "visitor"
+    elif default is not None:
+        status.active = "default"
+    if active is not None:
+        status.provider = active.get("provider", "openai")
+        status.base_url = active.get("base_url")
+        status.model = active.get("model")
+        status.auto_model = bool(active.get("auto_model", False))
+        info = active.get("models_info") or []
+        status.models_info = [ModelInfoOut(**m) for m in info
+                              if isinstance(m, dict) and m.get("id")]
+    return status
+
+
+@app.post("/llm/token", response_model=TokenStatus)
+def save_token(req: TokenSaveRequest):
+    """Guarda el token del visitante, cifrado en el servidor. La
+    predeterminada NO se puede poner ni borrar desde aqui: solo el
+    dueno la establece con el script en el servidor."""
+    vault = container.token_vault
+    if not vault.configured:
+        raise HTTPException(
+            status_code=503,
+            detail="El guardado de tokens no esta configurado en el "
+                   "servidor: falta TOKEN_ENCRYPTION_KEY. Puedes pegar el "
+                   "token sin guardarlo, o pedir al dueno que configure "
+                   "la clave.")
+    config = {"api_key": req.api_key, "provider": req.provider,
+              "base_url": req.base_url, "model": req.model,
+              "auto_model": req.auto_model,
+              "models_info": ([m.model_dump() for m in req.models_info]
+                              if req.models_info else None)}
+    try:
+        vault.save_visitor(req.browser_id, config)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except TokenVaultUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return _token_status(req.browser_id)
+
+
+@app.get("/llm/token/status", response_model=TokenStatus)
+def token_status(browser_id: str | None = None):
+    return _token_status(browser_id)
+
+
+@app.delete("/llm/token", response_model=TokenStatus)
+def delete_token(browser_id: str):
+    """Borra el token del visitante y vuelve al predeterminado (si lo
+    hay) o al modo demo. La predeterminada no se toca."""
+    try:
+        container.token_vault.delete_visitor(browser_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _token_status(browser_id)
+
+
+def _resolve_key_and_selection(provider: str, base_url: str | None,
+                               model: str | None, auto_model: bool,
+                               models_info_json: str | None, api_key: str,
+                               browser_id: str | None):
+    """Resuelve la clave efectiva y la seleccion de modelo.
+
+    Orden de la clave: token explicito de la peticion > token guardado
+    del visitante (por browser_id) > predeterminado compartido > nada
+    (demo). La seleccion (proveedor, modelo, automatico) la pone la
+    peticion cuando trae una; si no trae ninguna y la clave viene de
+    la boveda, se usa la guardada. El modo automatico exige lista de
+    modelos (como siempre): sin lista, _resolve_llm devuelve el 400
+    habitual. Devuelve (api_key, provider, base_url, model, auto_model,
+    models_info_json, origen) con origen en request, visitor, default o
+    demo. Nunca devuelve el valor de la clave en errores: los mensajes
+    solo hablan de configuracion."""
+    if api_key:
+        return (api_key, provider, base_url, model, auto_model,
+                models_info_json, "request")
+    try:
+        config, source = container.token_vault.resolve(browser_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except TokenVaultUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"No se pudo usar el token guardado: {exc}")
+    if config is None:
+        return (None, provider, base_url, model, auto_model,
+                models_info_json, "demo")
+    if model or auto_model:
+        return (config["api_key"], provider, base_url, model, auto_model,
+                models_info_json, source)
+    sel_info = (json.dumps(config.get("models_info"))
+                if config.get("models_info") else None)
+    return (config["api_key"], config.get("provider", "openai"),
+            config.get("base_url"), config.get("model"),
+            bool(config.get("auto_model", False)), sel_info, source)
 
 
 def _candidates(models_info_json: str | None) -> list[ModelCandidate]:
@@ -167,17 +315,26 @@ def _answer_out(answer):
 
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest):
-    if req.llm is not None:
+    llm_in = req.llm
+    api_key, provider, base_url, model, auto_model, models_info_json, source = (
+        _resolve_key_and_selection(
+            llm_in.provider if llm_in else "openai",
+            llm_in.base_url if llm_in else None,
+            llm_in.model if llm_in else None,
+            llm_in.auto_model if llm_in else False,
+            json.dumps([m.model_dump() for m in llm_in.models_info])
+            if llm_in and llm_in.models_info else None,
+            llm_in.api_key if llm_in else "",
+            req.browser_id))
+    if api_key:
         llm, model_used, model_auto = _resolve_llm(
-            req.llm.provider, req.llm.model, req.llm.api_key, req.llm.base_url,
-            req.llm.auto_model,
-            json.dumps([m.model_dump() for m in req.llm.models_info])
-            if req.llm.models_info else None,
-            need_vision=False)
+            provider, model, api_key, base_url, auto_model,
+            models_info_json, need_vision=False)
         use_case = AskUseCase(llm, container.ask.embedding, container.ask.store)
+        token_source = source
     else:
         use_case = container.ask
-        model_used, model_auto = "demo", False
+        model_used, model_auto, token_source = "demo", False, "demo"
     # Antes, cualquier fallo del proveedor (401, 404, timeout, conexion,
     # respuesta con forma inesperada) escapaba sin mapear y FastAPI
     # devolvia un 500 "Internal Server Error" en el chat. Ahora se
@@ -203,7 +360,8 @@ def ask(req: AskRequest):
     return AskResponse(
         answer=answer.text, sources=sources,
         image_id=answer.image_id, image_page=answer.image_page,
-        image_url=image_url, model_used=model_used, model_auto=model_auto)
+        image_url=image_url, model_used=model_used, model_auto=model_auto,
+        token_source=token_source)
 
 
 @app.post("/ask-audio", response_model=AudioAskResponse)
@@ -216,10 +374,17 @@ def ask_audio(audio: UploadFile = File(...),
               models_info_json: str | None = Form(None),
               transcription_model: str = Form("whisper-1"),
               question: str = Form(""),
-              top_k: int = Form(5)):
+              top_k: int = Form(5),
+              browser_id: str | None = Form(None)):
     """Pregunta por audio: transcribe y luego pregunta al RAG con el texto.
-    Exige token: sin el, no hay transcripcion posible y no se inventa una.
-    El audio no se guarda como documento."""
+    La clave puede venir pegada en la peticion o resuelta en el servidor
+    (token guardado del visitante o predeterminado). Sin ninguna, no se
+    transcribe nada y no se inventa una. El audio no se guarda como
+    documento."""
+    api_key, provider, base_url, model, auto_model, models_info_json, source = (
+        _resolve_key_and_selection(
+            provider, base_url, model, auto_model, models_info_json,
+            api_key or "", browser_id))
     if not api_key:
         raise HTTPException(
             status_code=400,
@@ -266,7 +431,7 @@ def ask_audio(audio: UploadFile = File(...),
         transcription=result.transcription, answer=answer.text, sources=sources,
         image_id=answer.image_id, image_page=answer.image_page,
         image_url=image_url, model_used=model_used, model_auto=model_auto,
-        transcription_model=trans_model)
+        transcription_model=trans_model, token_source=source)
 
 
 @app.post("/ask-image", response_model=ImageAskResponse)
@@ -278,11 +443,18 @@ def ask_image(image: UploadFile = File(...),
               auto_model: bool = Form(False),
               models_info_json: str | None = Form(None),
               question: str = Form(""),
-              top_k: int = Form(5)):
+              top_k: int = Form(5),
+              browser_id: str | None = Form(None)):
     """Pregunta con imagen: el modelo de vision la describe y con esa
     descripcion se busca en el RAG a que hace referencia. La imagen
-    enviada NO se indexa como documento. Si el modelo no soporta vision,
+    enviada NO se indexa como documento. La clave puede venir pegada
+    en la peticion o resuelta en el servidor (token guardado del
+    visitante o predeterminado). Si el modelo no soporta vision,
     error claro, sin descripcion inventada."""
+    api_key, provider, base_url, model, auto_model, models_info_json, source = (
+        _resolve_key_and_selection(
+            provider, base_url, model, auto_model, models_info_json,
+            api_key or "", browser_id))
     if not api_key:
         raise HTTPException(
             status_code=400,
@@ -328,7 +500,8 @@ def ask_image(image: UploadFile = File(...),
     return ImageAskResponse(
         description=result.description, answer=answer.text, sources=sources,
         image_id=answer.image_id, image_page=answer.image_page,
-        image_url=image_url, model_used=model_used, model_auto=model_auto)
+        image_url=image_url, model_used=model_used, model_auto=model_auto,
+        token_source=source)
 
 
 def _provider_url(provider: str, base_url: str | None) -> str:

@@ -14,8 +14,11 @@ class ModelInfoOut(BaseModel):
 
 
 class LlmOverride(BaseModel):
-    """Token y modelo elegidos en la web. Solo vive en la peticion:
-    nunca se guarda en disco ni en logs.
+    """Token y modelo elegidos en la web. Con api_key no vacio, el
+    token vive solo en la peticion: nunca se guarda en disco ni en
+    logs. Con api_key vacio, la clave se resuelve en el servidor: el
+    token guardado del visitante (por browser_id) o el predeterminado
+    compartido; sin ninguno, modo demo.
 
     Con auto_model=True el backend elige el modelo mas economico segun
     lo que requiera la pregunta (vision si hay imagen, transcripcion si
@@ -25,7 +28,7 @@ class LlmOverride(BaseModel):
     provider: str = "openai"  # openai | openrouter | custom
     base_url: str | None = None
     model: str | None = None
-    api_key: str
+    api_key: str = ""
     auto_model: bool = False
     models_info: list[ModelInfoOut] | None = None
 
@@ -34,6 +37,9 @@ class AskRequest(BaseModel):
     question: str = Field(min_length=1)
     top_k: int = 5
     llm: LlmOverride | None = None
+    # Identificador aleatorio del navegador: solo sirve para buscar
+    # el token guardado de ese visitante. Nunca es el token.
+    browser_id: str | None = None
 
 
 class SourceOut(BaseModel):
@@ -52,6 +58,10 @@ class AskResponse(BaseModel):
     # Modelo que realmente genero la respuesta, para mostrarlo en la UI.
     model_used: str | None = None
     model_auto: bool = False
+    # Origen del token usado: request (pegado en esta sesion), visitor
+    # (guardado del visitante), default (predeterminado compartido) o
+    # demo (sin token). Nunca incluye el valor del token.
+    token_source: str | None = None
 
 
 class AudioAskResponse(BaseModel):
@@ -64,6 +74,7 @@ class AudioAskResponse(BaseModel):
     model_used: str | None = None
     model_auto: bool = False
     transcription_model: str | None = None
+    token_source: str | None = None
 
 
 class ImageAskResponse(BaseModel):
@@ -75,6 +86,7 @@ class ImageAskResponse(BaseModel):
     image_url: str | None = None
     model_used: str | None = None
     model_auto: bool = False
+    token_source: str | None = None
 
 
 class JobOut(BaseModel):
@@ -92,8 +104,45 @@ class JobOut(BaseModel):
 
 
 class DetectRequest(BaseModel):
-    api_key: str = Field(min_length=1)
+    # Token pegado ahora (detect clasico) o identificador del navegador
+    # para detectar con el token guardado (visitante o predeterminado).
+    # Al menos uno debe venir; el valor del token nunca se devuelve.
+    api_key: str = ""
     base_url: str | None = None
+    browser_id: str | None = None
+
+
+class TokenSaveRequest(BaseModel):
+    """Guardar el token del visitante, cifrado en el servidor. El
+    resto de campos son la configuracion elegida en la web (proveedor,
+    modelo, seleccion) para reconstruirla al volver sin volver a pegar
+    el token. Nada de esto devuelve jamas el valor del token."""
+    browser_id: str
+    api_key: str = Field(min_length=1)
+    provider: str = "openai"
+    base_url: str | None = None
+    model: str | None = None
+    auto_model: bool = False
+    models_info: list[ModelInfoOut] | None = None
+
+
+class TokenStatus(BaseModel):
+    """Estado del token para un navegador, sin el valor: que hay
+    guardado, cual esta activo y con que configuracion (sin secreto).
+    vault_error explica por que el guardado no esta usable (por
+    ejemplo, falta la clave de cifrado) sin exponer nada secreto."""
+    has_visitor_token: bool = False
+    has_default: bool = False
+    # visitor (token propio guardado) | default (predeterminado
+    # compartido) | demo (sin token).
+    active: str = "demo"
+    vault_configured: bool = False
+    vault_error: str | None = None
+    provider: str | None = None
+    base_url: str | None = None
+    model: str | None = None
+    auto_model: bool = False
+    models_info: list[ModelInfoOut] = []
 
 
 class DetectResponse(BaseModel):

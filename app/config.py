@@ -22,6 +22,14 @@ class Settings(BaseSettings):
     storage_dir: str = "storage"
     demo_mode: bool = True
     log_level: str = "INFO"
+    # Guardado de tokens en el servidor (cifrado Fernet). Sin clave,
+    # guardar y usar tokens guardados fallan con mensaje claro: nunca
+    # se guarda nada en plano. La clave nunca va en Git (.env.example
+    # la trae vacia) ni se devuelve en ninguna respuesta.
+    token_encryption_key: str = ""
+    # Opcionales: si no se fijan, cuelgan de storage_dir.
+    token_store_dir: str | None = None
+    default_token_path: str | None = None
 
     @property
     def use_demo_llm(self) -> bool:
