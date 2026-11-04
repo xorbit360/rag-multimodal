@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import uuid
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -27,16 +30,67 @@ from app.dependencies import Container
 from app.domain.model_selection import (
     ModelCandidate, select_model, select_transcription_model,
 )
-from app.domain.ports import ProviderResponseError, VisionNotSupportedError
+from app.domain.models import JobStatus
+from app.domain.ports import (
+    ProviderResponseError, StoreUnavailableError, VisionNotSupportedError,
+)
 from app.domain.use_cases import AskUseCase, AudioAskUseCase, ImageAskUseCase
 from app.infrastructure.logging import setup_logging
 from app.infrastructure.resilience import CircuitOpenError
 
 setup_logging()
+log = logging.getLogger(__name__)
 settings = get_settings()
 container = Container(settings)
 
-app = FastAPI(title="RAG Multimodal", version="0.4.0")
+EXAMPLE_MANUAL = Path(__file__).resolve().parents[1] / "examples" / "Manual_Motor.pdf"
+
+
+def seed_example_manual(container, settings):
+    """Ingesta del manual de ejemplo al arrancar, solo en modo demo y
+    solo si el vector store esta vacio. Idempotente: si ya hay chunks,
+    no duplica nada (y el hash queda registrado, asi que una subida
+    posterior del mismo PDF por UI se detecta como duplicada). Corre el
+    mismo pipeline de la subida por UI, de forma sincrona (sin pasar
+    por la cola), para no depender del worker en el arranque. Si algo
+    falla, solo registra un warning: el seed nunca tumba el arranque.
+    Devuelve el job completado o None si no se sembro nada."""
+    if not settings.demo_mode:
+        return None
+    if not EXAMPLE_MANUAL.exists():
+        log.warning("seed omitido: no existe el manual de ejemplo %s", EXAMPLE_MANUAL)
+        return None
+    try:
+        existing = container.store.all_chunks()
+    except Exception as exc:  # noqa: BLE001 - el seed nunca tumba el arranque
+        log.warning("seed omitido: no se pudo revisar el store: %s", exc)
+        return None
+    if existing:
+        log.info("seed omitido: el store ya tiene %s chunks", len(existing))
+        return None
+    try:
+        digest = hashlib.sha256(EXAMPLE_MANUAL.read_bytes()).hexdigest()
+        job = container.ingest.run_sync(
+            str(EXAMPLE_MANUAL), "Manual_Motor.pdf", file_hash=digest)
+    except Exception as exc:  # noqa: BLE001 - el seed nunca tumba el arranque
+        log.warning("seed del manual fallido: %s", exc)
+        return None
+    if job.status != JobStatus.COMPLETED:
+        log.warning("seed del manual fallido: job %s estado %s error %s",
+                    job.id, job.status, job.error)
+        return None
+    log.info("seed completado: Manual_Motor.pdf chunks=%s imagenes=%s",
+             job.chunks_count, job.images_count)
+    return job
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    seed_example_manual(container, settings)
+    yield
+
+
+app = FastAPI(title="RAG Multimodal", version="0.4.0", lifespan=lifespan)
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".webm", ".flac", ".mp4"}
@@ -341,6 +395,11 @@ def ask(req: AskRequest):
     # traduce a 502 con un mensaje limpio, igual que en audio e imagen.
     try:
         answer = use_case.ask(req.question, top_k=req.top_k)
+    except StoreUnavailableError:
+        raise HTTPException(
+            status_code=503,
+            detail="El servicio de busqueda no esta disponible en este "
+                   "momento. Intentalo de nuevo en unos minutos.")
     except httpx.HTTPError:
         raise HTTPException(
             status_code=502,
@@ -410,6 +469,11 @@ def ask_audio(audio: UploadFile = File(...),
         result = use_case.ask_audio(audio.file.read(), audio.filename or "audio",
                                     trans_model, question_text=question,
                                     top_k=top_k)
+    except StoreUnavailableError:
+        raise HTTPException(
+            status_code=503,
+            detail="El servicio de busqueda no esta disponible en este "
+                   "momento. Intentalo de nuevo en unos minutos.")
     except httpx.HTTPError:
         raise HTTPException(
             status_code=502,
@@ -478,6 +542,11 @@ def ask_image(image: UploadFile = File(...),
     try:
         result = use_case.ask_image(image.file.read(), mime,
                                     question_text=question, top_k=top_k)
+    except StoreUnavailableError:
+        raise HTTPException(
+            status_code=503,
+            detail="El servicio de busqueda no esta disponible en este "
+                   "momento. Intentalo de nuevo en unos minutos.")
     except VisionNotSupportedError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except httpx.HTTPError:

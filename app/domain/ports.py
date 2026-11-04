@@ -46,6 +46,13 @@ class VisionNotSupportedError(Exception):
     """El proveedor o el modelo no acepta imagenes (vision)."""
 
 
+class StoreUnavailableError(Exception):
+    """El vector store no responde (conexion caida, coleccion danada u
+    otro error del motor). No es un fallo del core: el endpoint lo
+    traduce a un 503 limpio, nunca a un 500. Una coleccion inexistente
+    NO es este error: significa 'sin documentos' y se devuelve vacio."""
+
+
 class ProviderResponseError(Exception):
     """El proveedor devolvio una respuesta con forma inesperada (sin
     opciones, contenido vacio o cuerpo no JSON). No es un fallo del

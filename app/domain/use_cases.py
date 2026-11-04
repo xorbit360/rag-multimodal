@@ -88,6 +88,23 @@ class IngestUseCase:
         log.info("ingesta iniciada job_id=%s document=%s", job.id, document_name)
         return job
 
+    def run_sync(self, pdf_path: str, document_name: str,
+                 file_hash: str | None = None) -> Job:
+        """Ingesta sincrona, sin pasar por la cola: crea el job, registra
+        el hash (para que la subida posterior del mismo PDF por UI lo
+        detecte como duplicado) y ejecuta el mismo pipeline de run().
+        La usa el seed del manual de ejemplo en el arranque; la subida
+        por UI sigue usando start() (asincrona)."""
+        job = Job(id=str(uuid.uuid4()), document_name=document_name,
+                  file_hash=file_hash)
+        self.jobs.save(job)
+        if file_hash:
+            with self._hash_lock:
+                self._hash_index[file_hash] = job.id
+        self.run(job.id, pdf_path, document_name)
+        saved = self.jobs.get(job.id)
+        return saved if saved is not None else job
+
     def run(self, job_id: str, pdf_path: str, document_name: str) -> None:
         job = self.jobs.get(job_id)
         if job is None:

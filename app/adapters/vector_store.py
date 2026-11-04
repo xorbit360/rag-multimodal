@@ -11,9 +11,21 @@ import logging
 import math
 import uuid
 
+import httpx
+
 from app.domain.models import Chunk, RetrievedChunk
+from app.domain.ports import StoreUnavailableError
 
 log = logging.getLogger(__name__)
+
+
+def _qdrant_error(exc: Exception) -> StoreUnavailableError:
+    """Traduce un fallo de Qdrant a error de dominio. Nunca se deja
+    pasar la excepcion cruda del cliente: el endpoint la convierte
+    en un 503 limpio."""
+    return StoreUnavailableError(
+        "El servicio de busqueda no esta disponible en este momento. "
+        "Intentalo de nuevo en unos minutos.")
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -74,11 +86,31 @@ class QdrantVectorStore:
         ]
         self._client.upsert(collection_name=self._collection, points=points)
 
-    def search(self, vector: list[float], top_k: int) -> list[RetrievedChunk]:
-        from qdrant_client.models import SearchRequest
+    def _collection_exists(self) -> bool:
+        """True si la coleccion existe. Un fallo de conexion u otro
+        error de Qdrant se traduce a StoreUnavailableError (no a un
+        booleano mentiroso ni a la excepcion cruda del cliente)."""
+        from qdrant_client.http.exceptions import UnexpectedResponse
 
-        results = self._client.search(
-            collection_name=self._collection, query_vector=vector, limit=top_k)
+        try:
+            return bool(self._client.collection_exists(self._collection))
+        except (UnexpectedResponse, httpx.HTTPError) as exc:
+            raise _qdrant_error(exc) from exc
+
+    def search(self, vector: list[float], top_k: int) -> list[RetrievedChunk]:
+        from qdrant_client.http.exceptions import UnexpectedResponse
+
+        # Coleccion inexistente = sin documentos, no un error: se
+        # devuelve vacio para que el caso de uso responda la negativa
+        # defensiva en vez de un 500 (era el fallo visto en vivo al
+        # preguntar antes de ingerir nada).
+        if not self._collection_exists():
+            return []
+        try:
+            results = self._client.search(
+                collection_name=self._collection, query_vector=vector, limit=top_k)
+        except (UnexpectedResponse, httpx.HTTPError) as exc:
+            raise _qdrant_error(exc) from exc
         out: list[RetrievedChunk] = []
         for r in results:
             p = r.payload
@@ -90,21 +122,28 @@ class QdrantVectorStore:
         return out
 
     def all_chunks(self) -> list[Chunk]:
+        from qdrant_client.http.exceptions import UnexpectedResponse
+
         # Scroll completo: aceptable para el volumen de la prueba; en
         # produccion con 100+ manuales se pagina y se cachea el indice BM25.
+        if not self._collection_exists():
+            return []
         chunks: list[Chunk] = []
         offset = None
-        while True:
-            points, offset = self._client.scroll(
-                collection_name=self._collection, limit=100, offset=offset,
-                with_payload=True)
-            for pt in points:
-                p = pt.payload
-                chunks.append(Chunk(id=p["chunk_id"], document_id=p["document_id"],
-                                    document_name=p["document_name"], page=p["page"],
-                                    text=p["text"], bbox=None, kind=p.get("kind", "text"),
-                                    image_id=p.get("image_id"),
-                                    section=p.get("section", "")))
-            if offset is None:
-                break
+        try:
+            while True:
+                points, offset = self._client.scroll(
+                    collection_name=self._collection, limit=100, offset=offset,
+                    with_payload=True)
+                for pt in points:
+                    p = pt.payload
+                    chunks.append(Chunk(id=p["chunk_id"], document_id=p["document_id"],
+                                        document_name=p["document_name"], page=p["page"],
+                                        text=p["text"], bbox=None, kind=p.get("kind", "text"),
+                                        image_id=p.get("image_id"),
+                                        section=p.get("section", "")))
+                if offset is None:
+                    break
+        except (UnexpectedResponse, httpx.HTTPError) as exc:
+            raise _qdrant_error(exc) from exc
         return chunks

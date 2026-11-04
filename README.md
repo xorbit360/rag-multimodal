@@ -44,13 +44,54 @@ curl -X POST http://localhost:8000/ask \
   -H "Content-Type: application/json" \
   -d '{"question": "¿Cuál es el par de apriete de los tornillos de culata?"}'
 # {"answer": "... 24 Nm ...",
-#  "sources": [{"document_name": "Manual_Motor.pdf", "page": 3, "kind": "table"}],
+#  "sources": [{"document_name": "Manual_Motor.pdf", "page": 4, "kind": "table"}],
 #  "image_url": "/images/<id>"}
 ```
 
 Pregunta fuera de contexto → respuesta explícita, sin fuentes inventadas:
 
 > "No tengo información suficiente en los documentos para responder eso."
+
+## Manual de ejemplo precargado (seed)
+
+Al arrancar la API, si `demo_mode` es `True` y el vector store está
+vacío, se ingiere automáticamente `examples/Manual_Motor.pdf` con el
+mismo pipeline de la subida por UI (parser, chunking, embeddings,
+store, imágenes), de forma síncrona y sin pasar por la cola. Así el
+demo responde desde el primer momento sin que el visitante tenga que
+subir nada, y preguntar sin documentos ya no produce un error crudo:
+
+- Si el store ya tiene chunks, el seed no hace nada (no duplica).
+- Si el seed falla (store caído, PDF ausente, error de ingesta), solo
+  queda un warning en el log: el arranque nunca se tumba.
+- Fuera de modo demo, el seed no corre.
+- El hash del manual queda registrado: si después se sube el mismo PDF
+  por UI, se detecta como duplicado y no se reindexa.
+
+Si Qdrant no responde, `/ask` (y `/ask-audio`, `/ask-image`) devuelven
+un 503 limpio en español en vez de un 500. Una colección inexistente
+no es un error: significa "sin documentos" y la búsqueda devuelve
+vacío, para que el caso de uso responda la negativa defensiva.
+
+## Contenido del manual de ejemplo
+
+`examples/Manual_Motor.pdf` tiene 12 páginas, 18 chunks (13 de texto y
+5 de tabla) y 4 imágenes embebidas que el parser extrae con página y
+bbox: vista explotada (pág. 3), circuito de refrigeración (pág. 6),
+circuito de lubricación (pág. 7) y esquema eléctrico (pág. 8).
+Secciones: introducción, especificaciones técnicas, componentes,
+pares de apriete, plan de mantenimiento, refrigeración, lubricación,
+sistema eléctrico, cambio de aceite, diagnóstico de fallas, seguridad
+y registro/glosario. Datos clave verificados tras la ingesta: par de
+culata **24 Nm (pág. 4, tabla)**, potencia 12 kW (pág. 2), termostato
+82 °C (pág. 6), presión de aceite 2,5–4,0 bar (pág. 7).
+
+Regenerar el PDF (y sus 4 diagramas PNG) después de editar el
+generador:
+
+```bash
+python examples/generate_manual.py
+```
 
 ## Arquitectura (hexagonal)
 
@@ -302,8 +343,9 @@ app/
   infrastructure/         # resilience, logging
 frontend/app.py           # Streamlit
 examples/
-  generate_manual.py      # genera el PDF de ejemplo
+  generate_manual.py      # genera el PDF de ejemplo (12 paginas)
   Manual_Motor.pdf        # PDF de ejemplo (inventado para la prueba)
+  diagrama_*.png          # 4 diagramas embebidos (se regeneran al correr el script)
 tests/                    # pytest con mocks, sin red ni llaves
 docker-compose.yml        # api + frontend + qdrant + redis
 ```
