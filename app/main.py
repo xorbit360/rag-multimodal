@@ -191,7 +191,13 @@ def data_overview():
         samples = container.store.sample_points(limit=5)
     except StoreUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
-    if settings.embedding_provider == "openai":
+    # La etiqueta refleja el adaptador REAL, no solo el ajuste: si el
+    # proveedor es openai pero no hay llave en el entorno, Container
+    # cae a HashEmbedding y la etiqueta debe decir hash, no openai.
+    # Mentir aqui haria creer que los vectores son semanticos cuando
+    # son solo coincidencia de tokens.
+    from app.adapters.embeddings import OpenAICompatibleEmbedding
+    if isinstance(container.embedding, OpenAICompatibleEmbedding):
         embedding_label = f"openai ({settings.embedding_model})"
     else:
         embedding_label = (

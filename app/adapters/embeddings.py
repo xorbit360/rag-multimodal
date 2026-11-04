@@ -64,4 +64,19 @@ class OpenAICompatibleEmbedding:
             )
             resp.raise_for_status()
             return [item["embedding"] for item in resp.json()["data"]]
-        return self._breaker.call(lambda: retry_with_backoff(_call))
+        raw = self._breaker.call(lambda: retry_with_backoff(_call))
+        # Normalizar a la dimension configurada: un modelo real puede
+        # devolver mas dimensiones que la coleccion (por ejemplo
+        # text-embedding-3-small devuelve 1536 y la coleccion se crea
+        # a 384). Sin esto, la ingesta fallaria en Qdrant por tamano
+        # de vector. Los modelos de la familia 3 son Matryoshka, asi
+        # que truncar conserva la mayor parte de la senal; si un
+        # vector viniera mas corto, se rellena con ceros. Luego se
+        # renormaliza para que el coseno siga siendo comparable.
+        out: list[list[float]] = []
+        for vec in raw:
+            v = list(vec[:self._dimension])
+            v += [0.0] * (self._dimension - len(v))
+            norm = math.sqrt(sum(x * x for x in v)) or 1.0
+            out.append([x / norm for x in v])
+        return out
