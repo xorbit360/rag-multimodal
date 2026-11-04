@@ -76,3 +76,69 @@ class FakeLLM:
         if not best:
             return INSUFFICIENT_ANSWER
         return "Segun los documentos recuperados: " + " ".join(best).strip()
+
+
+PROVIDERS = {
+    "openai": "https://api.openai.com/v1",
+    "openrouter": "https://openrouter.ai/api/v1",
+}
+
+
+def build_override_llm(provider: str, model: str, api_key: str,
+                       base_url: str | None = None) -> OpenAICompatibleLLM:
+    """Construye el adaptador LLM para un token pegado en la web."""
+    if provider == "custom":
+        if not base_url:
+            raise ValueError("proveedor custom requiere base_url")
+        url = base_url
+    elif provider in PROVIDERS:
+        url = PROVIDERS[provider]
+    else:
+        raise ValueError(f"proveedor desconocido: {provider}")
+    return OpenAICompatibleLLM(api_key=api_key, base_url=url, model=model)
+
+
+def detect_provider(api_key: str, base_url: str | None = None):
+    """Detecta a que proveedor pertenece un token, probandolo contra
+    endpoints autenticados. Nunca se registra ni se devuelve la clave.
+
+    OpenAI: GET /v1/models exige clave valida.
+    OpenRouter: /v1/models es publico, asi que la validez se prueba con
+    GET /v1/auth/key y el catalogo se lista despues.
+    Con base_url propio se prueba solo ese endpoint (custom).
+    Devuelve (proveedor, modelos) o (None, []) si ninguno lo acepta.
+    El modelo NO viene en el token: se lista desde el proveedor y el
+    usuario lo elige en la web."""
+    if base_url:
+        try:
+            resp = httpx.get(f"{base_url.rstrip('/')}/models",
+                             headers={"Authorization": f"Bearer {api_key}"},
+                             timeout=10.0)
+            if resp.status_code == 200:
+                models = [m.get("id") for m in resp.json().get("data", [])
+                          if m.get("id")]
+                return "custom", models
+        except Exception:
+            pass
+        return None, []
+    order = (["openrouter", "openai"] if api_key.startswith("sk-or-")
+             else ["openai", "openrouter"])
+    for name in order:
+        try:
+            if name == "openrouter":
+                auth = httpx.get(f"{PROVIDERS[name]}/auth/key",
+                                 headers={"Authorization": f"Bearer {api_key}"},
+                                 timeout=10.0)
+                if auth.status_code != 200:
+                    continue
+            resp = httpx.get(f"{PROVIDERS[name]}/models",
+                             headers={"Authorization": f"Bearer {api_key}"},
+                             timeout=10.0)
+            if resp.status_code == 200:
+                models = [m.get("id") for m in resp.json().get("data", [])
+                          if m.get("id")]
+                log.info("token detectado proveedor=%s modelos=%s", name, len(models))
+                return name, models
+        except Exception:
+            continue
+    return None, []

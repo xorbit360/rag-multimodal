@@ -8,16 +8,20 @@ import uuid
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
-from app.api.schemas import AskRequest, AskResponse, JobOut, SourceOut
+from app.adapters.llm import PROVIDERS, build_override_llm, detect_provider
+from app.api.schemas import (
+    AskRequest, AskResponse, DetectRequest, DetectResponse, JobOut, SourceOut,
+)
 from app.config import get_settings
 from app.dependencies import Container
+from app.domain.use_cases import AskUseCase
 from app.infrastructure.logging import setup_logging
 
 setup_logging()
 settings = get_settings()
 container = Container(settings)
 
-app = FastAPI(title="RAG Multimodal", version="0.1.0")
+app = FastAPI(title="RAG Multimodal", version="0.2.0")
 
 
 @app.get("/health")
@@ -59,9 +63,34 @@ def list_documents():
     return list(docs.values())
 
 
+@app.post("/llm/detect", response_model=DetectResponse)
+def detect_llm(req: DetectRequest):
+    # Nunca se registra ni se devuelve la clave: solo proveedor y modelos.
+    provider, models = detect_provider(req.api_key, req.base_url)
+    if provider is None:
+        return DetectResponse(
+            detected=False,
+            message="No se reconoció el token en OpenAI ni en OpenRouter. "
+                    "Puedes configurarlo manual con proveedor y base_url.")
+    base = req.base_url if provider == "custom" else PROVIDERS[provider]
+    return DetectResponse(detected=True, provider=provider, base_url=base,
+                          models=models[:300],
+                          message=f"Proveedor detectado: {provider} "
+                                  f"({len(models)} modelos)")
+
+
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest):
-    answer = container.ask.ask(req.question, top_k=req.top_k)
+    if req.llm is not None:
+        try:
+            llm = build_override_llm(req.llm.provider, req.llm.model,
+                                     req.llm.api_key, req.llm.base_url)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        use_case = AskUseCase(llm, container.ask.embedding, container.ask.store)
+    else:
+        use_case = container.ask
+    answer = use_case.ask(req.question, top_k=req.top_k)
     image_url = f"/images/{answer.image_id}" if answer.image_id else None
     return AskResponse(
         answer=answer.text,

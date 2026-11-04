@@ -2,6 +2,7 @@
 
 Muestra: historial, Markdown, fuentes explicitas "Fuente: X, Pagina N" y,
 cuando la respuesta usa un diagrama/imagen, la imagen mas cercana.
+La clave del LLM, si se pega, solo vive en la sesion: no se guarda.
 """
 import os
 import time
@@ -45,6 +46,48 @@ with st.sidebar:
         st.write(f"- {doc['document_name']} ({doc['chunks']} chunks, "
                  f"{doc['images']} imagenes)")
 
+    st.header("LLM (opcional)")
+    st.caption("Sin clave, responde en modo demo sin costo. Pega tu token y "
+               "se detecta el proveedor solo. La clave solo vive en esta "
+               "sesion, no se guarda.")
+    token = st.text_input("Token del LLM", type="password")
+    if st.button("Detectar proveedor") and token:
+        with st.spinner("Detectando proveedor..."):
+            det = httpx.post(f"{API_URL}/llm/detect", json={"api_key": token},
+                             timeout=30.0).json()
+        if det["detected"]:
+            st.session_state["llm_detected"] = det
+            st.success(f"Proveedor detectado: {det['provider']}")
+        else:
+            st.session_state["llm_detected"] = None
+            st.warning("No se reconoció el token. Configúralo manual abajo.")
+    det = st.session_state.get("llm_detected")
+    provider = None
+    base_url = None
+    model = None
+    if det:
+        provider = det["provider"]
+        base_url = det["base_url"]
+        models = det["models"] or []
+        if models:
+            default = "gpt-4o-mini" if "gpt-4o-mini" in models else models[0]
+            model = st.selectbox("Modelo", models, index=models.index(default))
+        else:
+            model = st.text_input("Modelo")
+    else:
+        provider = st.selectbox("Proveedor (manual)",
+                                ["openai", "openrouter", "custom"])
+        if provider == "custom":
+            base_url = st.text_input("Base URL (ej. http://localhost:11434/v1)")
+        model = st.text_input("Modelo")
+    if token and model:
+        st.session_state["llm_override"] = {"provider": provider,
+                                            "base_url": base_url,
+                                            "model": model,
+                                            "api_key": token}
+    elif not token:
+        st.session_state.pop("llm_override", None)
+
 if "history" not in st.session_state:
     st.session_state["history"] = []
 
@@ -65,8 +108,13 @@ if question:
         st.markdown(question)
     with st.chat_message("assistant"):
         with st.spinner("Buscando en los documentos..."):
-            resp = httpx.post(f"{API_URL}/ask", json={"question": question},
-                              timeout=120.0)
+            payload = {"question": question}
+            if st.session_state.get("llm_override"):
+                payload["llm"] = st.session_state["llm_override"]
+            resp = httpx.post(f"{API_URL}/ask", json=payload, timeout=120.0)
+            if resp.status_code != 200:
+                st.error(f"Error del LLM: {resp.text[:300]}")
+                st.stop()
             data = resp.json()
             st.markdown(data["answer"])
             if data.get("image_url"):

@@ -142,6 +142,19 @@ Sin llave, o con `DEMO_MODE=true`, entra `FakeLLM`: respuesta
 extractiva desde los chunks, sin llamar a ninguna API de pago. Es el
 modo usado en tests y en la demo local.
 
+### Tu propio token desde la web (opcional)
+En la barra lateral, pega tu token y pulsa "Detectar proveedor": la API
+lo prueba contra OpenAI y OpenRouter (en OpenRouter la validez se
+comprueba con /auth/key porque /models es publico) y te muestra el
+proveedor y sus modelos para elegir. Un token solo no dice que modelo
+es: el modelo se lista desde el proveedor y lo eliges tu. Tambien hay
+configuracion manual (proveedor + base_url + modelo) para cualquier
+endpoint compatible con OpenAI, incluido Ollama local. Sin token, sigue
+el modo demo sin costo. La clave solo vive en la memoria de tu sesion:
+nunca se guarda en disco, en Git ni en logs, y viaja solo del navegador
+al frontend por TLS y de ahi a la API por la red interna de Docker
+(la API no se publica).
+
 ### Embeddings
 En producción: OpenAI / Ollama vía el mismo adaptador compatible. En
 tests/demo: embedding por hash determinista (384 dim, offline, gratis).
