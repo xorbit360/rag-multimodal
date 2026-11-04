@@ -3,15 +3,16 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import uuid
 
 from app.adapters.chunking import chunk_document
 from app.domain.models import (
-    INSUFFICIENT_ANSWER, Answer, Job, JobStatus, Source,
+    INSUFFICIENT_ANSWER, Answer, AudioAnswer, ImageAnswer, Job, JobStatus, Source,
 )
 from app.domain.ports import (
     EmbeddingPort, JobQueuePort, JobStorePort, LLMPort, PDFParserPort,
-    VectorStorePort,
+    TranscriptionPort, VectorStorePort, VisionPort,
 )
 from app.domain.retrieval import hybrid_retrieve
 
@@ -36,10 +37,49 @@ class IngestUseCase:
         self.store = store
         self.queue = queue
         self.jobs = jobs
+        # Indice hash SHA-256 del PDF -> job canonico. Vive en memoria por
+        # proceso, igual que el JobStore: si el proceso reinicia, el indice
+        # se reconstruye con las ingestas nuevas (el vector store persiste
+        # aparte segun el adaptador configurado).
+        self._hash_index: dict[str, str] = {}
+        self._hash_lock = threading.Lock()
 
-    def start(self, pdf_path: str, document_name: str) -> Job:
-        job = Job(id=str(uuid.uuid4()), document_name=document_name)
+    def start(self, pdf_path: str, document_name: str,
+              file_hash: str | None = None) -> Job:
+        if file_hash:
+            with self._hash_lock:
+                canonical = self._hash_index.get(file_hash)
+            if canonical:
+                existing = self.jobs.get(canonical)
+                if existing is not None and existing.status != JobStatus.FAILED:
+                    if existing.status == JobStatus.COMPLETED:
+                        # Guardado inteligente: no se duplica nada. Se devuelve
+                        # un job nuevo ya completado que apunta al documento
+                        # original, con el aviso en el mensaje.
+                        reuse = Job(
+                            id=str(uuid.uuid4()), document_name=document_name,
+                            status=JobStatus.COMPLETED, progress=1.0,
+                            message="Documento ya indexado: se reutilizo la "
+                                    "ingesta anterior, sin duplicar chunks.",
+                            document_id=existing.document_id,
+                            chunks_count=existing.chunks_count,
+                            images_count=existing.images_count,
+                            file_hash=file_hash, duplicate=True)
+                        self.jobs.save(reuse)
+                        log.info("ingesta duplicada evitada hash=%s job_id=%s",
+                                 file_hash[:12], reuse.id)
+                        return reuse
+                    # En curso: se devuelve el mismo job para que el cliente
+                    # lo siga por polling; no se lanza un segundo trabajo.
+                    log.info("ingesta en curso reutilizada hash=%s job_id=%s",
+                             file_hash[:12], existing.id)
+                    return existing
+        job = Job(id=str(uuid.uuid4()), document_name=document_name,
+                  file_hash=file_hash)
         self.jobs.save(job)
+        if file_hash:
+            with self._hash_lock:
+                self._hash_index[file_hash] = job.id
 
         def _run() -> None:
             self.run(job.id, pdf_path, document_name)
@@ -80,6 +120,12 @@ class IngestUseCase:
             job.status = JobStatus.FAILED
             job.error = str(exc)
             job.message = "Fallo en la ingesta"
+            # Un fallo libera el hash: un reintento posterior debe poder
+            # volver a ingerir el mismo archivo.
+            if job.file_hash:
+                with self._hash_lock:
+                    if self._hash_index.get(job.file_hash) == job.id:
+                        del self._hash_index[job.file_hash]
             log.exception("ingesta fallida job_id=%s error=%s", job_id, exc)
         finally:
             self.jobs.save(job)
@@ -122,3 +168,45 @@ class AskUseCase:
         image_id = next((s.image_id for s in sources if s.image_id), None)
         image_page = next((s.page for s in sources if s.image_id), None)
         return Answer(text=text, sources=sources, image_id=image_id, image_page=image_page)
+
+
+class AudioAskUseCase:
+    """Pregunta por audio: transcribe y luego ejecuta el flujo normal de
+    ask con el texto transcrito. La transcripcion se devuelve tal cual:
+    nunca se inventa una cuando falta el token (eso lo impide el endpoint
+    exigiendo el override antes de llamar aqui)."""
+
+    def __init__(self, transcriber: TranscriptionPort, ask: AskUseCase):
+        self.transcriber = transcriber
+        self.ask = ask
+
+    def ask_audio(self, audio: bytes, filename: str, model: str,
+                  question_text: str = "", top_k: int = 5) -> AudioAnswer:
+        transcription = self.transcriber.transcribe(audio, filename, model)
+        parts = [p for p in (question_text.strip(), transcription) if p]
+        question = "\n".join(parts)
+        answer = self.ask.ask(question, top_k=top_k)
+        return AudioAnswer(transcription=transcription, answer=answer)
+
+
+class ImageAskUseCase:
+    """Pregunta con imagen: el modelo de vision describe la imagen y con
+    esa descripcion se ejecuta la recuperacion hibrida normal contra el
+    RAG. La imagen enviada NO se indexa: es insumo de pregunta, y la
+    busqueda responde a que hace referencia dentro de lo ya indexado."""
+
+    def __init__(self, vision: VisionPort, ask: AskUseCase):
+        self.vision = vision
+        self.ask = ask
+
+    def ask_image(self, image: bytes, mime: str, question_text: str = "",
+                  top_k: int = 5) -> ImageAnswer:
+        description = self.vision.describe(image, mime)
+        if question_text.strip():
+            query = (f"{question_text.strip()}\n"
+                     f"Descripcion de la imagen adjunta: {description}")
+        else:
+            query = ("A que hace referencia esta imagen en los documentos? "
+                     f"Descripcion de la imagen: {description}")
+        answer = self.ask.ask(query, top_k=top_k)
+        return ImageAnswer(description=description, answer=answer)

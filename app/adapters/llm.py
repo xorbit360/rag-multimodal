@@ -98,28 +98,50 @@ def build_override_llm(provider: str, model: str, api_key: str,
     return OpenAICompatibleLLM(api_key=api_key, base_url=url, model=model)
 
 
-def detect_provider(api_key: str, base_url: str | None = None):
-    """Detecta a que proveedor pertenece un token, probandolo contra
-    endpoints autenticados. Nunca se registra ni se devuelve la clave.
+def _fetch_models(base_url: str, api_key: str):
+    """GET /models autenticado. Devuelve la lista cruda o None."""
+    try:
+        resp = httpx.get(f"{base_url.rstrip('/')}/models",
+                         headers={"Authorization": f"Bearer {api_key}"},
+                         timeout=10.0)
+        if resp.status_code == 200:
+            return resp.json().get("data", [])
+    except Exception:
+        pass
+    return None
 
-    OpenAI: GET /v1/models exige clave valida.
-    OpenRouter: /v1/models es publico, asi que la validez se prueba con
-    GET /v1/auth/key y el catalogo se lista despues.
-    Con base_url propio se prueba solo ese endpoint (custom).
-    Devuelve (proveedor, modelos) o (None, []) si ninguno lo acepta.
-    El modelo NO viene en el token: se lista desde el proveedor y el
-    usuario lo elige en la web."""
-    if base_url:
+
+def _parse_models_info(raw_models) -> list[dict]:
+    """Normaliza la lista del proveedor: id, precio de prompt (si lo trae,
+    como OpenRouter en pricing.prompt) y modalidad (si la trae, como
+    OpenRouter en architecture.modality, p. ej. 'text+image->text').
+    OpenAI y custom no dan precios ni modalidad: quedan en None."""
+    info = []
+    for m in raw_models or []:
+        model_id = m.get("id")
+        if not model_id:
+            continue
+        prompt_price = None
+        pricing = m.get("pricing") or {}
         try:
-            resp = httpx.get(f"{base_url.rstrip('/')}/models",
-                             headers={"Authorization": f"Bearer {api_key}"},
-                             timeout=10.0)
-            if resp.status_code == 200:
-                models = [m.get("id") for m in resp.json().get("data", [])
-                          if m.get("id")]
-                return "custom", models
-        except Exception:
-            pass
+            if pricing.get("prompt") is not None:
+                prompt_price = float(pricing["prompt"])
+        except (TypeError, ValueError):
+            prompt_price = None
+        modality = (m.get("architecture") or {}).get("modality")
+        info.append({"id": model_id, "prompt_price": prompt_price,
+                     "modality": modality})
+    return info
+
+
+def detect_provider_info(api_key: str, base_url: str | None = None):
+    """Igual que detect_provider, pero devuelve tambien precios y
+    modalidad por modelo, para la seleccion automatica del mas economico.
+    Devuelve (proveedor, models_info) o (None, []) si ninguno lo acepta."""
+    if base_url:
+        data = _fetch_models(base_url, api_key)
+        if data is not None:
+            return "custom", _parse_models_info(data)
         return None, []
     order = (["openrouter", "openai"] if api_key.startswith("sk-or-")
              else ["openai", "openrouter"])
@@ -131,14 +153,26 @@ def detect_provider(api_key: str, base_url: str | None = None):
                                  timeout=10.0)
                 if auth.status_code != 200:
                     continue
-            resp = httpx.get(f"{PROVIDERS[name]}/models",
-                             headers={"Authorization": f"Bearer {api_key}"},
-                             timeout=10.0)
-            if resp.status_code == 200:
-                models = [m.get("id") for m in resp.json().get("data", [])
-                          if m.get("id")]
-                log.info("token detectado proveedor=%s modelos=%s", name, len(models))
-                return name, models
+            data = _fetch_models(PROVIDERS[name], api_key)
+            if data is not None:
+                info = _parse_models_info(data)
+                log.info("token detectado proveedor=%s modelos=%s", name, len(info))
+                return name, info
         except Exception:
             continue
     return None, []
+
+
+def detect_provider(api_key: str, base_url: str | None = None):
+    """Detecta a que proveedor pertenece un token, probandolo contra
+    endpoints autenticados. Nunca se registra ni se devuelve la clave.
+
+    OpenAI: GET /v1/models exige clave valida.
+    OpenRouter: /v1/models es publico, asi que la validez se prueba con
+    GET /v1/auth/key y el catalogo se lista despues.
+    Con base_url propio se prueba solo ese endpoint (custom).
+    Devuelve (proveedor, modelos) o (None, []) si ninguno lo acepta.
+    El modelo NO viene en el token: se lista desde el proveedor y el
+    usuario lo elige en la web."""
+    provider, info = detect_provider_info(api_key, base_url)
+    return provider, [m["id"] for m in info]

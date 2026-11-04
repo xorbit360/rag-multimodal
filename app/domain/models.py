@@ -88,6 +88,10 @@ class Job:
     chunks_count: int = 0
     images_count: int = 0
     error: Optional[str] = None
+    # Hash SHA-256 del PDF original: deduplica re-ingestas del mismo archivo.
+    file_hash: Optional[str] = None
+    # True cuando este job reutilizo una ingesta anterior (mismo hash).
+    duplicate: bool = False
 
 
 @dataclass
@@ -113,6 +117,21 @@ class Answer:
     sources: list[Source] = field(default_factory=list)
     image_id: Optional[str] = None
     image_page: Optional[int] = None
+
+
+@dataclass
+class AudioAnswer:
+    """Pregunta por audio: transcripcion + respuesta normal del RAG."""
+    transcription: str
+    answer: Answer
+
+
+@dataclass
+class ImageAnswer:
+    """Pregunta con imagen: descripcion del modelo de vision + respuesta
+    normal del RAG. La imagen enviada NO se indexa: es insumo de pregunta."""
+    description: str
+    answer: Answer
 
 
 INSUFFICIENT_ANSWER = (

@@ -42,6 +42,25 @@ class LLMPort(Protocol):
         ...
 
 
+class VisionNotSupportedError(Exception):
+    """El proveedor o el modelo no acepta imagenes (vision)."""
+
+
+class TranscriptionPort(Protocol):
+    def transcribe(self, audio: bytes, filename: str, model: str) -> str:
+        """Transcribe un audio con el endpoint OpenAI-compatible
+        /audio/transcriptions. Devuelve solo el texto."""
+        ...
+
+
+class VisionPort(Protocol):
+    def describe(self, image: bytes, mime: str) -> str:
+        """Describe una imagen con un modelo de vision (chat completions
+        con image_url). Si el modelo no soporta vision, lanza
+        VisionNotSupportedError: nunca se inventa una descripcion."""
+        ...
+
+
 class JobQueuePort(Protocol):
     def enqueue(self, job: Job, fn: Callable[[], None]) -> None:
         """Encola el trabajo. La implementacion decide como se ejecuta."""
