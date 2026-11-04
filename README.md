@@ -283,17 +283,27 @@ ancho completo, los botones son grandes y tactiles (minimo 48 px) y el
 input usa fuente de 16 px para evitar el zoom automatico de iOS. No es
 un rediseno completo, solo ajustes para que se vea bien en el movil.
 
-### Boton "Visualizar RAG" (panel solo lectura, para el evaluador)
-En la barra lateral del demo hay un boton "Visualizar RAG" que
-consulta `GET /data/overview` y muestra: motor (Qdrant o memoria),
-coleccion, puntos guardados, dimension del vector, tipo de embedding
-y los primeros puntos de ejemplo con documento, pagina, tipo, seccion
-y texto. Es un GET que nunca modifica nada ni devuelve secretos: los
-textos mostrados ya son visibles en las respuestas del chat. El
-endpoint existe SOLO en modo demo (fuera de el devuelve 404), para no
-exponer datos de un despliegue real. El dashboard crudo de Qdrant NO
-se expone en publico a proposito: sin contrasena, cualquiera podria
-leer y borrar la coleccion.
+### Boton "Visualizar RAG" (abre el Qdrant real, con contrasena)
+En la barra lateral del demo hay un boton "Visualizar RAG" que abre
+el dashboard real de Qdrant (la URL la fija `QDRANT_DASHBOARD_URL`:
+en el VPS es el subdominio de Qdrant, en local el Qdrant del propio
+docker-compose). El dashboard va detras de usuario y contrasena
+(basic auth de Traefik, solo en el servidor): sin la clave, nadie
+entra a ver ni a borrar la coleccion. Las credenciales NO van al
+repositorio (es publico): viven solo en el servidor y se comparten
+con el evaluador por el correo privado de entrega. Ademas, el
+endpoint `GET /data/overview` sigue disponible como API de solo
+lectura (motor, coleccion, puntos, dimension, embedding y puntos de
+ejemplo) y existe SOLO en modo demo (fuera de el devuelve 404).
+
+### Lista de documentos tras un reinicio
+`GET /documents` une el registro de jobs con el contenido real del
+vector store: el registro vive en memoria y se pierde al reiniciar el
+contenedor, pero los chunks persisten en Qdrant. Sin esta union, tras
+un reinicio la lista salia vacia aunque el store tuviera los puntos.
+Los jobs mandan cuando existen (para no duplicar ni perder el estado
+de una ingesta en curso); si el store no responde, se devuelve solo
+lo de los jobs, nunca un 500.
 
 ### Cliente Qdrant: query_points (no .search)
 La busqueda semantica usa `query_points`, la API vigente de

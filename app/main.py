@@ -140,6 +140,27 @@ def list_documents():
                                      "chunks": job.chunks_count,
                                      "images": job.images_count,
                                      "status": job.status.value}
+    # El registro de jobs vive en memoria y se pierde al reiniciar el
+    # contenedor, pero los chunks persisten en el vector store: sin
+    # esto, tras un reinicio la lista salia vacia aunque Qdrant tuviera
+    # los 18 puntos. Se completa con el contenido real del store (los
+    # jobs mandan cuando existen, para no duplicar ni perder el estado).
+    try:
+        chunks = container.store.all_chunks()
+    except StoreUnavailableError:
+        chunks = []
+    by_doc: dict[str, list] = {}
+    for chunk in chunks:
+        by_doc.setdefault(chunk.document_id, []).append(chunk)
+    for doc_id, doc_chunks in by_doc.items():
+        if doc_id in docs:
+            continue
+        docs[doc_id] = {"document_id": doc_id,
+                        "document_name": doc_chunks[0].document_name,
+                        "chunks": len(doc_chunks),
+                        "images": len({c.image_id for c in doc_chunks
+                                       if c.image_id}),
+                        "status": "completed"}
     return list(docs.values())
 
 
